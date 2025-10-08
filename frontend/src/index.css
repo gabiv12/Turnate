@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===== ajustes globales ===== */
+html, body, #root { height: 100%; }
+body { @apply bg-slate-50 text-slate-900 antialiased; }
+a { @apply text-blue-600 hover:text-blue-700 no-underline; }
+
+/* ===== anti-scroll lateral global ===== */
+html, body, #root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* ===== Calendario (react-big-calendar) – retoques ===== */
+.calendario-wrapper .rbc-toolbar {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.calendario-wrapper .rbc-toolbar .rbc-toolbar-label {
+  font-weight: 600;
+  color: #0f172a; /* slate-900 */
+}
+.calendario-wrapper .rbc-btn-group > button {
+  background: #ffffff;
+  border: 1px solid #e5e7eb; /* gray-200 */
+  border-radius: 0.6rem;
+  padding: 0.45rem 0.75rem;
+  line-height: 1;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.calendario-wrapper .rbc-btn-group > button:hover {
+  background: #f3f4f6; /* gray-100 */
+}
+.calendario-wrapper .rbc-btn-group > button.rbc-active {
+  background: #2563eb;  /* blue-600 */
+  border-color: #1d4ed8; /* blue-700 */
+  color: #fff;
+}
+.calendario-wrapper .rbc-agenda-view table.rbc-agenda-table td,
+.calendario-wrapper .rbc-agenda-view table.rbc-agenda-table th {
+  font-size: 0.95rem;
+}
+
+/* react-big-calendar no debe forzar min-width */
+.rbc-calendar { width: 100% !important; }
+.rbc-time-view,
+.rbc-month-view,
+.rbc-time-header-content {
+  min-width: 0 !important;
+}
