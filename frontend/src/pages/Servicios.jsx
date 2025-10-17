@@ -2,7 +2,19 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../services/api";
 
-const money = new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
+const money = new Intl.NumberFormat("es-AR", {
+  style: "currency",
+  currency: "ARS",
+  maximumFractionDigits: 0,
+});
+
+const normSvc = (it = {}) => ({
+  id: it.id,
+  nombre: it.nombre ?? "",
+  duracion_min:
+    Number(it.duracion_min ?? it.duracion ?? it.duracionMinutos ?? 30) || 30,
+  precio: Number(it.precio ?? 0) || 0,
+});
 
 export default function Servicios() {
   const [items, setItems] = useState([]);
@@ -10,7 +22,8 @@ export default function Servicios() {
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
   const [form, setForm] = useState({ nombre: "", duracion_min: 30, precio: 0 });
-  const [editing, setEditing] = useState(null);
+  const [editing, setEditing] = useState(null); // {id,...} o null
+  const [saving, setSaving] = useState(false);
 
   const totalServicios = useMemo(() => items.length, [items]);
   const precioPromedio = useMemo(() => {
@@ -25,193 +38,302 @@ export default function Servicios() {
       setOk("");
       setLoading(true);
       const { data } = await api.get("/servicios/mis");
-      setItems(Array.isArray(data) ? data : []);
+      const arr = Array.isArray(data) ? data.map(normSvc) : [];
+      setItems(arr);
     } catch (e) {
-      setErr(e?.response?.data?.detail || "No se pudieron cargar los servicios.");
+      setErr(
+        e?.response?.data?.detail || "No se pudieron cargar los servicios."
+      );
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
-  function onChange(e) {
+  const resetForm = () =>
+    setForm({ nombre: "", duracion_min: 30, precio: 0 });
+
+  const onChange = (e) => {
     const { name, value } = e.target;
-    setForm((f) => ({
-      ...f,
-      [name]:
-        name === "precio" || name === "duracion_min"
-          ? (value === "" ? "" : Number(value))
-          : value,
-    }));
-  }
+    setForm((p) => {
+      if (name === "duracion_min" || name === "precio") {
+        const n = Number(value);
+        return { ...p, [name]: Number.isFinite(n) ? n : 0 };
+      }
+      return { ...p, [name]: value };
+    });
+  };
 
-  async function createOrUpdate(e) {
-    e.preventDefault();
+  const onEdit = (svc) => {
+    const n = normSvc(svc);
+    setEditing(n);
+    setForm({ nombre: n.nombre, duracion_min: n.duracion_min, precio: n.precio });
     setErr("");
     setOk("");
+  };
 
-    const payload = {
-      nombre: String(form.nombre || "").trim(),
-      duracion_min: Number(form.duracion_min) || 0,
-      precio: Number(form.precio) || 0,
-    };
+  const onCancelEdit = () => {
+    setEditing(null);
+    resetForm();
+  };
 
-    if (!payload.nombre) return setErr("El nombre es obligatorio.");
-    if (payload.duracion_min < 5) return setErr("La duración mínima es 5 minutos.");
-    if (payload.precio < 0) return setErr("El precio no puede ser negativo.");
-
+  const onDelete = async (svc) => {
+    if (!svc?.id) return;
+    if (!confirm(`¿Eliminar el servicio "${svc.nombre}"?`)) return;
     try {
-      if (editing) {
-        await api.patch(`/servicios/${editing.id}`, payload);
-        setOk("Servicio actualizado.");
-      } else {
-        await api.post("/servicios", payload);
-        setOk("Servicio agregado.");
-      }
-      setForm({ nombre: "", duracion_min: 30, precio: 0 });
-      setEditing(null);
-      await load();
-    } catch (e) {
-      console.error(e);
-      setErr(e?.response?.data?.detail || "No se pudo guardar el servicio.");
-    }
-  }
-
-  async function removeItem(id) {
-    if (!confirm("¿Eliminar servicio?")) return;
-    try {
-      await api.delete(`/servicios/${id}`);
+      setSaving(true);
+      setErr("");
+      setOk("");
+      await api.delete(`/servicios/${svc.id}`);
       setOk("Servicio eliminado.");
       await load();
     } catch (e) {
-      alert(e?.response?.data?.detail || "No se pudo eliminar.");
+      setErr(
+        e?.response?.data?.detail ||
+          "No se pudo eliminar el servicio. Si persiste, contactá al administrador."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const validate = () => {
+    if (!form.nombre?.trim()) return "Ingresá el nombre del servicio.";
+    if (!Number.isFinite(form.duracion_min) || form.duracion_min <= 0)
+      return "Ingresá una duración válida (minutos).";
+    if (!Number.isFinite(form.precio) || form.precio < 0)
+      return "Ingresá un precio válido (>= 0).";
+    return null;
+  };
+
+  async function saveCreate(payload) {
+    // crea
+    await api.post("/servicios", payload);
+  }
+  async function saveUpdate(id, payload) {
+    // update con PUT (fallback a PATCH solo por compat si alguien dejó algo viejo)
+    try {
+      await api.put(`/servicios/${id}`, payload);
+    } catch (e) {
+      if (e?.response?.status === 405) {
+        // No debería pasar, pero lo dejamos por si quedó algo en el back
+        await api.patch(`/servicios/${id}`, payload);
+      } else {
+        throw e;
+      }
     }
   }
 
-  function startEdit(it) {
-    setEditing(it);
-    setForm({
-      nombre: it.nombre ?? "",
-      duracion_min: Number(it.duracion_min) || 30,
-      precio: Number(it.precio) || 0,
-    });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+
+    const v = validate();
+    if (v) {
+      setErr(v);
+      setTimeout(() => setErr(""), 2200);
+      return;
+    }
+
+    const payload = {
+      nombre: form.nombre.trim(),
+      duracion_min: Number(form.duracion_min),
+      precio: Number(form.precio),
+    };
+
+    try {
+      setSaving(true);
+      setErr("");
+      setOk("");
+      if (editing?.id) {
+        await saveUpdate(editing.id, payload); // ← PUT
+        setOk("Servicio actualizado.");
+      } else {
+        await saveCreate(payload);
+        setOk("Servicio creado.");
+      }
+      await load();
+      onCancelEdit();
+      setTimeout(() => setOk(""), 2000);
+    } catch (e) {
+      const msg =
+        e?.response?.data?.detail ||
+        e?.response?.data?.message ||
+        (e?.response?.status === 401
+          ? "Tu sesión expiró. Volvé a iniciar sesión."
+          : e?.response?.status === 422
+          ? "Datos inválidos. Revisá los campos."
+          : "No se pudo guardar el servicio.");
+      setErr(msg);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      {/* Encabezado */}
-      <div className="rounded-3xl bg-gradient-to-r from-blue-600 to-cyan-400 p-5 text-white shadow">
-        <h1 className="text-2xl font-semibold">Servicios</h1>
-        <p className="text-sm opacity-90">Creá, editá y eliminá los servicios que ofrecés.</p>
-      </div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">Total de servicios</div>
-          <div className="text-2xl font-semibold text-slate-800">{totalServicios}</div>
+    <div className="grid gap-6">
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-800">Servicios</h1>
+          <p className="text-sm text-slate-500">
+            Gestioná los servicios que ofrecés y sus duraciones/precios.
+          </p>
         </div>
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">Precio promedio</div>
-          <div className="text-2xl font-semibold text-slate-800">{money.format(precioPromedio)}</div>
+        <div className="text-sm text-slate-600">
+          Total: <b>{totalServicios}</b> &middot; Promedio:{" "}
+          <b>{money.format(precioPromedio)}</b>
         </div>
-      </div>
-
-      {/* Mensajes */}
-      {err && <div className="rounded-xl border border-rose-200 bg-rose-50 text-rose-700 px-4 py-3">{err}</div>}
-      {ok && <div className="rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 px-4 py-3">{ok}</div>}
+      </header>
 
       {/* Formulario */}
-      <form onSubmit={createOrUpdate} className="rounded-2xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm grid gap-4">
-        <div className="grid sm:grid-cols-3 gap-3">
-          <label className="block">
-            <span className="text-sm text-slate-700">Nombre</span>
+      <form
+        onSubmit={onSubmit}
+        className="rounded-2xl border border-slate-200 bg-white p-4 md:p-5 grid gap-3"
+      >
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="md:col-span-1">
+            <label className="block text-xs font-semibold text-sky-700 mb-1">
+              Nombre
+            </label>
             <input
+              type="text"
               name="nombre"
               value={form.nombre}
               onChange={onChange}
-              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Corte de pelo"
-              required
+              placeholder="Ej: Corte + lavado"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:ring-2 focus:ring-sky-300"
             />
-          </label>
+          </div>
 
-          <label className="block">
-            <span className="text-sm text-slate-700">Duración (min)</span>
+          <div>
+            <label className="block text-xs font-semibold text-sky-700 mb-1">
+              Duración (min)
+            </label>
             <input
-              name="duracion_min"
               type="number"
               min={5}
+              max={600}
               step={5}
+              name="duracion_min"
               value={form.duracion_min}
               onChange={onChange}
-              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-              required
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:ring-2 focus:ring-sky-300"
             />
-          </label>
+          </div>
 
-          <label className="block">
-            <span className="text-sm text-slate-700">Precio (ARS)</span>
+          <div>
+            <label className="block text-xs font-semibold text-sky-700 mb-1">
+              Precio (ARS)
+            </label>
             <input
-              name="precio"
               type="number"
               min={0}
-              step={50}
+              step={100}
+              name="precio"
               value={form.precio}
               onChange={onChange}
-              className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-              placeholder="Ej.: 5000"
-              required
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 outline-none focus:ring-2 focus:ring-sky-300"
             />
-          </label>
+          </div>
         </div>
 
-        <div className="flex gap-2">
-          <button type="submit" className="rounded-xl bg-sky-600 text-white px-4 py-2.5 text-sm font-semibold">
-            {editing ? "Guardar cambios" : "Agregar servicio"}
-          </button>
-          {editing && (
+        <div className="flex items-center gap-2">
+          {editing ? (
+            <>
+              <button
+                type="button"
+                onClick={onCancelEdit}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-xl bg-emerald-600 px-5 py-2 text-white text-sm font-semibold shadow hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {saving ? "Guardando…" : "Guardar cambios"}
+              </button>
+            </>
+          ) : (
             <button
-              type="button"
-              onClick={() => { setEditing(null); setForm({ nombre: "", duracion_min: 30, precio: 0 }); }}
-              className="rounded-xl border border-slate-300 text-slate-700 px-4 py-2.5 text-sm font-semibold bg-white"
+              type="submit"
+              disabled={saving}
+              className="rounded-xl bg-sky-600 px-5 py-2 text-white text-sm font-semibold shadow hover:bg-sky-700 disabled:opacity-60"
             >
-              Cancelar
+              {saving ? "Guardando…" : "Agregar servicio"}
             </button>
           )}
         </div>
+
+        {ok && (
+          <div className="rounded-xl bg-emerald-50 text-emerald-700 text-sm px-4 py-2 ring-1 ring-emerald-200">
+            {ok}
+          </div>
+        )}
+        {err && (
+          <div className="rounded-xl bg-rose-50 text-rose-700 text-sm px-4 py-2 ring-1 ring-rose-200">
+            {err}
+          </div>
+        )}
       </form>
 
       {/* Lista */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-2 md:p-4 shadow-sm">
-        {loading ? (
-          <div className="p-6 text-slate-500">Cargando…</div>
-        ) : items.length === 0 ? (
-          <div className="p-6 text-slate-500">No hay servicios aún.</div>
-        ) : (
-          <ul className="divide-y divide-slate-100">
-            {items.map((it) => (
-              <li key={it.id} className="flex items-center justify-between gap-3 p-3">
-                <div>
-                  <div className="font-medium text-slate-800">{it.nombre}</div>
-                  <div className="text-xs text-slate-500">
-                    Duración: {it.duracion_min} min · Precio: {money.format(Number(it.precio) || 0)}
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => startEdit(it)} className="rounded-lg px-3 py-1.5 text-sm border border-slate-300 bg-white">
-                    Editar
-                  </button>
-                  <button onClick={() => removeItem(it.id)} className="rounded-lg px-3 py-1.5 text-sm bg-rose-600 text-white">
-                    Eliminar
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="rounded-2xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <th className="text-left px-3 py-2.5">Servicio</th>
+              <th className="text-left px-3 py-2.5">Duración</th>
+              <th className="text-left px-3 py-2.5">Precio</th>
+              <th className="px-3 py-2.5 text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading ? (
+              <tr>
+                <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+                  Cargando…
+                </td>
+              </tr>
+            ) : items.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+                  Aún no cargaste servicios.
+                </td>
+              </tr>
+            ) : (
+              items.map((it) => (
+                <tr key={it.id}>
+                  <td className="px-3 py-2.5 font-medium text-slate-800">
+                    {it.nombre}
+                  </td>
+                  <td className="px-3 py-2.5">{it.duracion_min} min</td>
+                  <td className="px-3 py-2.5">{money.format(it.precio)}</td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex justify-end gap-2">
+                      <button
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 hover:bg-slate-50"
+                        onClick={() => onEdit(it)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        className="rounded-lg bg-rose-600 text-white px-3 py-1.5 hover:bg-rose-700"
+                        onClick={() => onDelete(it)}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

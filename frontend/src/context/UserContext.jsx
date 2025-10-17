@@ -1,42 +1,130 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import api from "../components/api"; // mantiene tu instancia actual
 
-const Ctx = createContext(null);
+export const UserContext = createContext({
+  user: null,
+  setUser: () => {},
+  loginCtx: async () => {},
+  registerCtx: async () => {},
+  logout: () => {},
+});
+
+function setAuthToken(token) {
+  try {
+    if (token) {
+      localStorage.setItem("accessToken", token);
+      if (api?.defaults?.headers) {
+        api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+      }
+    } else {
+      localStorage.removeItem("accessToken");
+      if (api?.defaults?.headers?.common?.Authorization) {
+        delete api.defaults.headers.common["Authorization"];
+      }
+    }
+  } catch {}
+}
 
 export function UserProvider({ children }) {
-  const [token, setToken] = useState(null);
-  const [user, setUser] = useState(null);
-  const [ready, setReady] = useState(false);
+  const [user, setUser] = useState(() => {
+    try {
+      const raw = localStorage.getItem("user");
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
 
+  // Inyectar token guardado al montar
   useEffect(() => {
-    const t = localStorage.getItem("turnate_token");
-    const u = localStorage.getItem("turnate_user");
-    if (t) setToken(t);
-    if (u) setUser(JSON.parse(u));
-    setReady(true);
+    try {
+      const token = localStorage.getItem("accessToken");
+      if (token) setAuthToken(token);
+    } catch {}
   }, []);
 
-  function login({ access_token, user }) {
-    setToken(access_token);
-    setUser(user);
-    localStorage.setItem("turnate_token", access_token);
-    localStorage.setItem("turnate_user", JSON.stringify(user));
-  }
+  // Persistir user
+  useEffect(() => {
+    try {
+      if (user) localStorage.setItem("user", JSON.stringify(user));
+      else localStorage.removeItem("user");
+    } catch {}
+  }, [user]);
 
-  function logout() {
-    setToken(null);
+  const loginCtx = async ({ email, username, password }) => {
+    const payload = password
+      ? (email ? { email, password } : { username, password })
+      : { email: email || username };
+
+    // Intento 1
+    try {
+      const res = await api.post("/usuarios/login", payload);
+      const token = res?.data?.token || res?.data?.access_token;
+      const u = res?.data?.user || res?.data?.user_schema || res?.data?.usuario || res?.data;
+      if (!token || !u) throw new Error("Respuesta de login incompleta");
+      setAuthToken(token);
+      setUser(u);
+      return u;
+    } catch (err1) {
+      // Intento 2 (fallback)
+      try {
+        const res = await api.post("/auth/login", payload);
+        const token = res?.data?.token || res?.data?.access_token;
+        const u = res?.data?.user || res?.data?.usuario || res?.data;
+        if (!token || !u) throw new Error("Respuesta de login incompleta");
+        setAuthToken(token);
+        setUser(u);
+        return u;
+      } catch (err2) {
+        const d = err2?.response?.data || err1?.response?.data;
+        const msg = d?.detail || d?.message || "No se pudo iniciar sesión";
+        throw new Error(msg);
+      }
+    }
+  };
+
+  const registerCtx = async ({ username, email, password }) => {
+    const body = { username, email, password };
+
+    // Intento 1
+    try {
+      await api.post("/usuarios/", body);
+    } catch (e1) {
+      const st = e1?.response?.status;
+      if (st !== 404 && st !== 405) {
+        const d = e1?.response?.data;
+        const msg = d?.detail || d?.message || "No se pudo registrar";
+        throw new Error(msg);
+      }
+      // Intento 2
+      try {
+        await api.post("/usuarios/registro", body);
+      } catch (e2) {
+        const d = e2?.response?.data || e1?.response?.data;
+        const msg = d?.detail || d?.message || "No se pudo registrar";
+        throw new Error(msg);
+      }
+    }
+    // Login automático
+    return await loginCtx({ email, username, password });
+  };
+
+  const logout = () => {
+    try {
+      localStorage.removeItem("user");
+      setAuthToken(null);
+    } catch {}
     setUser(null);
-    localStorage.removeItem("turnate_token");
-    localStorage.removeItem("turnate_user");
-  }
+  };
 
-  const value = useMemo(() => ({ token, user, login, logout, setUser }), [token, user]);
+  const value = useMemo(
+    () => ({ user, setUser, loginCtx, registerCtx, logout }),
+    [user]
+  );
 
-  if (!ready) return null;
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
 }
 
 export function useUser() {
-  const v = useContext(Ctx);
-  if (!v) throw new Error("useUser debe usarse dentro de <UserProvider>");
-  return v;
+  return useContext(UserContext);
 }
+
+export default UserContext;

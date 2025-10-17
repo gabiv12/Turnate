@@ -1,445 +1,423 @@
 // src/pages/Estadisticas.jsx
 import { useEffect, useMemo, useState } from "react";
 import api from "../services/api";
+import {
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+} from "recharts";
+import { format } from "date-fns";
+import es from "date-fns/locale/es";
 
-/* =========================================
-   Utils dinero/fechas
-========================================= */
-const money = new Intl.NumberFormat("es-AR", {
+const PALETTE = [
+  "#2563eb", "#0ea5e9", "#22c55e", "#f59e0b", "#ef4444", "#9333ea",
+  "#14b8a6", "#f97316", "#84cc16", "#8b5cf6", "#06b6d4", "#dc2626",
+];
+
+const currency = new Intl.NumberFormat("es-AR", {
   style: "currency",
   currency: "ARS",
   maximumFractionDigits: 0,
 });
-function startOfMonthISO(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10);
-}
-function endOfMonthISO(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
-}
 
-/* =========================================
-   Pie (Donut) Chart en SVG (sin libs)
-   - data: [{ label, value, color }]
-   - total se calcula si no se pasa
-========================================= */
-function PieDonut({
-  data = [],
-  size = 220,
-  stroke = 28,
-  gap = 0,          // gap entre segmentos (en px de perímetro)
-  total,            // opcional
-  centerTitle = "",
-  centerSubtitle = "",
-}) {
-  const radius = (size - stroke) / 2;
-  const cx = size / 2;
-  const cy = size / 2;
-  const circ = 2 * Math.PI * radius;
-
-  const sum = total ?? data.reduce((a, d) => a + (Number(d.value) || 0), 0);
-  const safeData = data.filter(d => Number(d.value) > 0 && d.label);
-
-  // Calcula offsets acumulados
-  let acc = 0;
-  const segments = safeData.map((d, i) => {
-    const frac = (Number(d.value) || 0) / (sum || 1);
-    const dash = Math.max(0, circ * frac - gap);
-    const seg = {
-      ...d,
-      dash,
-      offset: acc,
-      frac,
-    };
-    acc += circ * frac;
-    return seg;
-  });
-
-  return (
-    <div className="flex items-center gap-4">
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
-        {/* Fondo círculo (gris claro) */}
-        <circle
-          cx={cx}
-          cy={cy}
-          r={radius}
-          fill="none"
-          stroke="#e5e7eb"
-          strokeWidth={stroke}
-        />
-        {/* Segmentos */}
-        {segments.map((s, i) => (
-          <circle
-            key={i}
-            cx={cx}
-            cy={cy}
-            r={radius}
-            fill="none"
-            stroke={s.color}
-            strokeWidth={stroke}
-            strokeDasharray={`${s.dash} ${circ - s.dash}`}
-            strokeDashoffset={-(s.offset / 1)}
-            transform={`rotate(-90 ${cx} ${cy})`} // inicia arriba
-            strokeLinecap="butt"
-          />
-        ))}
-
-        {/* Centro con métricas */}
-        <g>
-          <text
-            x={cx}
-            y={cy - 4}
-            textAnchor="middle"
-            className="fill-slate-800"
-            style={{ fontWeight: 700, fontSize: 18 }}
-          >
-            {centerTitle}
-          </text>
-          {!!centerSubtitle && (
-            <text
-              x={cx}
-              y={cy + 16}
-              textAnchor="middle"
-              className="fill-slate-500"
-              style={{ fontSize: 12 }}
-            >
-              {centerSubtitle}
-            </text>
-          )}
-        </g>
-      </svg>
-
-      {/* Leyenda */}
-      <ul className="space-y-2">
-        {segments.map((s, i) => (
-          <li key={i} className="flex items-center gap-3">
-            <span
-              className="inline-block h-3.5 w-3.5 rounded-sm"
-              style={{ backgroundColor: s.color }}
-              aria-hidden
-            />
-            <div className="min-w-[10rem]">
-              <div className="text-sm font-medium text-slate-800">{s.label}</div>
-              <div className="text-xs text-slate-500">
-                {s.value?.toLocaleString?.("es-AR") ?? s.value} · {(s.frac * 100).toFixed(1)}%
-              </div>
-            </div>
-          </li>
-        ))}
-        {segments.length === 0 && (
-          <li className="text-sm text-slate-500">Sin datos para graficar.</li>
-        )}
-      </ul>
-    </div>
-  );
+function toISODate(d) {
+  if (!d) return null;
+  const dt = new Date(d);
+  dt.setHours(0, 0, 0, 0);
+  return dt.toISOString().slice(0, 10);
 }
 
-/* Paleta accesible (alto contraste + diferenciación) */
-const PALETTE = [
-  "#2563EB", // azul
-  "#10B981", // verde
-  "#F59E0B", // ámbar
-  "#EF4444", // rojo
-  "#8B5CF6", // violeta
-  "#06B6D4", // cian
-  "#84CC16", // lima
-  "#EC4899", // rosa
-];
-
-/* =========================================
-   Página
-========================================= */
 export default function Estadisticas() {
-  const [desde, setDesde] = useState(startOfMonthISO());
-  const [hasta, setHasta] = useState(endOfMonthISO());
+  // Rango por defecto: mes actual
+  const now = new Date();
+  const defaultDesde = new Date(now.getFullYear(), now.getMonth(), 1);
+  const defaultHasta = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+  const [desde, setDesde] = useState(toISODate(defaultDesde));
+  const [hasta, setHasta] = useState(toISODate(defaultHasta));
+
   const [servicios, setServicios] = useState([]);
   const [turnos, setTurnos] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [includeCancelled, setIncludeCancelled] = useState(false);
 
-  async function load() {
+  async function loadData() {
+    setLoading(true);
     try {
-      setLoading(true);
-      setErr("");
-      const [srv, tur] = await Promise.all([
+      const [servRes, turRes] = await Promise.all([
         api.get("/servicios/mis"),
-        api.get("/turnos/mis", { params: { desde, hasta } }),
+        api.get("/turnos/owner", {
+          params: {
+            desde: new Date(`${desde}T00:00:00.000Z`).toISOString(),
+            hasta: new Date(`${hasta}T23:59:59.999Z`).toISOString(),
+          },
+        }),
       ]);
-      setServicios(Array.isArray(srv.data) ? srv.data : []);
-      setTurnos(Array.isArray(tur.data) ? tur.data : []);
+      setServicios(Array.isArray(servRes.data) ? servRes.data : []);
+      setTurnos(Array.isArray(turRes.data) ? turRes.data : []);
     } catch (e) {
-      setErr(e?.response?.data?.detail || "No se pudieron cargar las estadísticas.");
+      console.error("Estadísticas: error cargando datos", e);
+      setServicios([]);
+      setTurnos([]);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
+    loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // primera carga
+  }, []);
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desde, hasta]);
+  const onApplyRange = () => loadData();
 
-  // Diccionario servicio por id
-  const byId = useMemo(() => {
+  // Map de servicios
+  const serviciosMap = useMemo(() => {
     const m = new Map();
     servicios.forEach((s) => m.set(Number(s.id), s));
     return m;
   }, [servicios]);
 
+  // Precio usado en estadísticas (confirmados)
+  function precioTurno(t) {
+    const p = t?.precio_aplicado;
+    if (typeof p === "number" && p > 0) return p;
+    const s = serviciosMap.get(Number(t.servicio_id));
+    return s?.precio ?? 0;
+  }
+
+  // Separación por estado
+  const confirmados = useMemo(
+    () => turnos.filter((t) => (t.estado || "confirmado") === "confirmado"),
+    [turnos]
+  );
+  const cancelados = useMemo(
+    () => turnos.filter((t) => (t.estado || "") === "cancelado"),
+    [turnos]
+  );
+
   // KPIs
-  const kpis = useMemo(() => {
-    const totalTurnos = turnos.length;
-    const ingresos = turnos.reduce((acc, t) => {
-      const s = byId.get(Number(t.servicio_id)) || t.servicio;
-      return acc + (Number(s?.precio) || 0);
-    }, 0);
-    const avg = totalTurnos ? Math.round(ingresos / totalTurnos) : 0;
-    return { totalTurnos, ingresos, avg };
-  }, [turnos, byId]);
+  const ingresosTotales = useMemo(
+    () => confirmados.reduce((acc, t) => acc + precioTurno(t), 0),
+    [confirmados]
+  );
+  const ticketPromedio = useMemo(() => {
+    const c = confirmados.length || 1;
+    return Math.round(ingresosTotales / c);
+  }, [ingresosTotales, confirmados]);
 
-  // Agregado por servicio
-  const { porIngresos, porCantidad } = useMemo(() => {
-    const acc = new Map();
-    for (const t of turnos) {
-      const s = byId.get(Number(t.servicio_id)) || t.servicio;
-      const key = s?.id || t.servicio_id || "otros";
-      const precio = Number(s?.precio) || 0;
-      if (!acc.has(key)) acc.set(key, { id: key, nombre: s?.nombre || "Servicio", cantidad: 0, ingresos: 0, precio });
-      const item = acc.get(key);
-      item.cantidad += 1;
-      item.ingresos += precio;
-      acc.set(key, item);
-    }
-    const arr = Array.from(acc.values());
-    const porIngresos = [...arr].sort((a, b) => b.ingresos - a.ingresos);
-    const porCantidad = [...arr].sort((a, b) => b.cantidad - a.cantidad);
-    return { porIngresos, porCantidad };
-  }, [turnos, byId]);
+  // Agregados por servicio (para cantidad e ingresos)
+  const agregadosServicio = useMemo(() => {
+    const map = new Map(); // sid -> {count, amount, nombre}
+    confirmados.forEach((t) => {
+      const sid = Number(t.servicio_id) || 0;
+      const svc = serviciosMap.get(sid);
+      const ref = map.get(sid) || { count: 0, amount: 0, nombre: svc?.nombre || "Servicio" };
+      ref.count += 1;
+      ref.amount += precioTurno(t);
+      map.set(sid, ref);
+    });
+    // array ordenado por count desc para fijar colores y leyenda
+    const arr = [...map.entries()].map(([sid, v]) => ({ servicio_id: sid, ...v }));
+    arr.sort((a, b) => b.count - a.count);
+    return arr;
+  }, [confirmados, serviciosMap]);
 
-  // Series para gráficas (con colores)
-  const pieIngresos = useMemo(() => {
-    const total = porIngresos.reduce((a, x) => a + x.ingresos, 0);
-    return porIngresos.map((x, i) => ({
-      label: x.nombre,
-      value: x.ingresos,
-      color: PALETTE[i % PALETTE.length],
-      total,
-    }));
-  }, [porIngresos]);
+  // Mapeo de color por servicio (consistente entre tortas)
+  const colorByServicio = useMemo(() => {
+    const m = new Map();
+    agregadosServicio.forEach((item, i) => {
+      m.set(item.servicio_id, PALETTE[i % PALETTE.length]);
+    });
+    return m;
+  }, [agregadosServicio]);
 
-  const pieCantidad = useMemo(() => {
-    const total = porCantidad.reduce((a, x) => a + x.cantidad, 0);
-    return porCantidad.map((x, i) => ({
-      label: x.nombre,
-      value: x.cantidad,
-      color: PALETTE[i % PALETTE.length],
-      total,
-    }));
-  }, [porCantidad]);
+  // Tortas
+  const pieCantidad = agregadosServicio.map((x) => ({
+    name: x.nombre,
+    value: x.count,
+    color: colorByServicio.get(x.servicio_id),
+  }));
+  const pieIngresos = agregadosServicio.map((x) => ({
+    name: x.nombre,
+    value: x.amount,
+    color: colorByServicio.get(x.servicio_id),
+  }));
+  const totalConfirmados = confirmados.length || 1;
+
+  const pieEstados = [
+    { name: "Confirmados", value: confirmados.length, color: "#16a34a" }, // green-600
+    { name: "Cancelados", value: cancelados.length, color: "#94a3b8" },   // slate-400
+  ];
+
+  // Tabla (opción incluir cancelados)
+  const tablaTurnos = useMemo(() => {
+    const base = includeCancelled ? turnos : confirmados;
+    const sorted = [...base].sort((a, b) => new Date(a.inicio) - new Date(b.inicio));
+    return sorted.map((t) => {
+      const d = new Date(t.inicio || t.desde || t.datetime);
+      const svc = serviciosMap.get(Number(t.servicio_id));
+      return {
+        id: t.id,
+        fecha: isNaN(d) ? "—" : format(d, "dd/MM/yyyy", { locale: es }),
+        hora: isNaN(d) ? "—" : format(d, "HH:mm"),
+        cliente: t.cliente_nombre || t?.cliente?.nombre || "—",
+        servicio: svc?.nombre || "Servicio",
+        precio: precioTurno(t),
+        estado: t.estado || "confirmado",
+      };
+    });
+  }, [turnos, confirmados, includeCancelled, serviciosMap]);
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="rounded-3xl bg-gradient-to-r from-blue-600 to-cyan-400 p-5 text-white shadow">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Estadísticas</h1>
-            <p className="text-sm opacity-90">
-              Resumen de turnos e ingresos estimados en el período seleccionado.
-            </p>
+    <div className="min-h-[100dvh] flex flex-col">
+      {/* Encabezado (igual al resto): gradiente + texto blanco */}
+      <header className="rounded-3xl bg-gradient-to-r from-blue-600 to-cyan-400 p-5 md:p-6 text-white shadow mx-4 mt-4">
+        <div className="mx-auto max-w-6xl">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h1 className="text-2xl font-semibold">Estadísticas</h1>
+              <p className="text-sm md:text-base/relaxed opacity-90">
+                Desempeño, distribución por servicio e ingresos del período.
+              </p>
+            </div>
           </div>
+        </div>
+      </header>
 
-          {/* Filtro fechas */}
-          <div className="flex items-center gap-2 bg-white/10 rounded-xl px-2 py-2">
-            <div className="flex items-center gap-2 bg-white rounded-lg px-3 py-1.5 shadow">
-              <span className="text-slate-600 text-xs">Desde</span>
+      <main className="mx-auto w-full max-w-6xl px-4 py-6 space-y-6">
+        {/* Filtros */}
+        <section className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <div className="flex flex-col md:flex-row md:items-end gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-700">Desde</label>
               <input
                 type="date"
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 value={desde}
                 onChange={(e) => setDesde(e.target.value)}
-                className="text-sm text-slate-800 outline-none"
               />
             </div>
-            <div className="flex items-center gap-2 bg-white rounded-lg px-3 py-1.5 shadow">
-              <span className="text-slate-600 text-xs">Hasta</span>
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-slate-700">Hasta</label>
               <input
                 type="date"
+                className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 value={hasta}
                 onChange={(e) => setHasta(e.target.value)}
-                className="text-sm text-slate-800 outline-none"
               />
             </div>
+            <div className="flex items-end">
+              <button
+                onClick={onApplyRange}
+                disabled={loading}
+                className="rounded-xl bg-sky-600 text-white px-4 py-2 text-sm font-semibold shadow hover:bg-sky-700 disabled:opacity-60"
+              >
+                {loading ? "Cargando..." : "Aplicar"}
+              </button>
+            </div>
           </div>
-        </div>
-      </div>
+        </section>
 
-      {err && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 text-rose-700 px-4 py-3">
-          {err}
-        </div>
-      )}
+        {/* KPIs */}
+        <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <KPI title="Ingresos totales" value={currency.format(ingresosTotales)} />
+          <KPI title="Confirmados" value={confirmados.length} />
+          <KPI title="Cancelados" value={cancelados.length} />
+          <KPI title="Ticket promedio" value={currency.format(ticketPromedio)} />
+        </section>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">Turnos</div>
-          <div className="text-2xl font-semibold text-slate-800">{kpis.totalTurnos}</div>
-        </div>
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">Ingresos estimados</div>
-          <div className="text-2xl font-semibold text-slate-800">{money.format(kpis.ingresos)}</div>
-        </div>
-        <div className="rounded-2xl bg-white shadow-sm border border-slate-200 p-4">
-          <div className="text-xs text-slate-500">Ticket promedio</div>
-          <div className="text-2xl font-semibold text-slate-800">{money.format(kpis.avg)}</div>
-        </div>
-      </div>
+        {/* Gráficos de torta + leyenda externa */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-4">
+          {/* Cantidad por servicio */}
+          <Card title="Cantidad por servicio" subtitle={`${confirmados.length} turnos`}>
+            <Donut data={pieCantidad} valueType="count" />
+          </Card>
 
-      {/* Gráficos de torta */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Ingresos por servicio */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 font-semibold text-slate-800">Distribución de ingresos por servicio</div>
-          <PieDonut
-            data={pieIngresos}
-            size={240}
-            stroke={34}
-            gap={0}
-            centerTitle={money.format(pieIngresos?.[0]?.total || 0)}
-            centerSubtitle="Total período"
-          />
-        </div>
+          {/* Ingresos por servicio */}
+          <Card title="Ingresos por servicio" subtitle={currency.format(ingresosTotales)}>
+            <Donut data={pieIngresos} valueType="money" />
+          </Card>
 
-        {/* Cantidad por servicio */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-3 font-semibold text-slate-800">Distribución de turnos por servicio</div>
-          <PieDonut
-            data={pieCantidad}
-            size={240}
-            stroke={34}
-            gap={0}
-            centerTitle={`${pieCantidad?.[0]?.total || 0}`}
-            centerSubtitle="Turnos"
-          />
-        </div>
-      </div>
+          {/* Estados */}
+          <Card title="Estados de turnos" subtitle={`${confirmados.length + cancelados.length} totales`}>
+            <Donut data={pieEstados} />
+          </Card>
 
-      {/* Rankings */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Top por ingresos */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-2 font-semibold text-slate-800">Top servicios por ingresos</div>
-          {pieIngresos.length === 0 ? (
-            <div className="text-sm text-slate-500">Sin datos en el período.</div>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {pieIngresos.map((r, i) => (
-                <li key={i} className="py-2 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-full text-white text-xs font-semibold"
-                      style={{ backgroundColor: r.color }}
-                      aria-hidden
+          {/* Leyenda de servicios (externa) */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <h3 className="text-base font-semibold text-slate-900 mb-2">
+              Servicios (leyenda)
+            </h3>
+            {pieCantidad.length === 0 ? (
+              <p className="text-sm text-slate-500">Sin datos en el período.</p>
+            ) : (
+              <ul className="grid grid-cols-1 gap-2">
+                {agregadosServicio.map((s, idx) => {
+                  const pct = Math.round((s.count / (totalConfirmados || 1)) * 100);
+                  const color = PALETTE[idx % PALETTE.length];
+                  return (
+                    <li
+                      key={s.servicio_id + "-" + idx}
+                      className="w-full flex items-start justify-between rounded-xl border border-slate-200 px-3 py-2"
                     >
-                      {i + 1}
-                    </span>
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">{r.label}</div>
-                      <div className="text-xs text-slate-500">
-                        {((r.value / (pieIngresos[0]?.total || 1)) * 100).toFixed(1)}%
+                      <div className="flex items-start gap-2 min-w-0 flex-1">
+                        <span
+                          className="mt-1 inline-block h-3 w-3 rounded-full"
+                          style={{ background: color }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-slate-800 leading-snug break-words whitespace-normal">
+                            {s.nombre}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                  <div className="text-sm font-semibold text-slate-800">
-                    {money.format(r.value)}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Top por cantidad */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-2 font-semibold text-slate-800">Top servicios por cantidad</div>
-          {pieCantidad.length === 0 ? (
-            <div className="text-sm text-slate-500">Sin datos en el período.</div>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {pieCantidad.map((r, i) => (
-                <li key={i} className="py-2 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-full text-white text-xs font-semibold"
-                      style={{ backgroundColor: r.color }}
-                      aria-hidden
-                    >
-                      {i + 1}
-                    </span>
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">{r.label}</div>
-                      <div className="text-xs text-slate-500">
-                        {((r.value / (pieCantidad[0]?.total || 1)) * 100).toFixed(1)}%
+                      <div className="flex items-center gap-3 shrink-0 pl-3">
+                        <span className="text-xs text-slate-500 tabular-nums">{pct}%</span>
+                        <span className="text-xs font-medium text-slate-700 tabular-nums">
+                          {s.count}
+                        </span>
                       </div>
-                    </div>
-                  </div>
-                  <div className="text-sm font-semibold text-slate-800">
-                    {r.value}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
 
-      {/* Lista de turnos del período */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-2 font-semibold text-slate-800">Turnos en el período</div>
-        {loading ? (
-          <div className="text-sm text-slate-500">Cargando…</div>
-        ) : turnos.length === 0 ? (
-          <div className="text-sm text-slate-500">Sin turnos en el rango seleccionado.</div>
-        ) : (
+        </section>
+
+        {/* Historial */}
+        <section className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-base font-semibold text-slate-900">
+              Historial del período
+            </h3>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300"
+                checked={includeCancelled}
+                onChange={(e) => setIncludeCancelled(e.target.checked)}
+              />
+              Incluir cancelados
+            </label>
+          </div>
+
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-full text-sm">
               <thead>
                 <tr className="text-left text-slate-500">
-                  <th className="py-2 pr-3">Fecha</th>
-                  <th className="py-2 pr-3">Hora</th>
-                  <th className="py-2 pr-3">Cliente</th>
-                  <th className="py-2 pr-3">Servicio</th>
-                  <th className="py-2 pr-3 text-right">Precio</th>
+                  <th className="py-2 pr-4">Fecha</th>
+                  <th className="py-2 pr-4">Hora</th>
+                  <th className="py-2 pr-4">Cliente</th>
+                  <th className="py-2 pr-4">Servicio</th>
+                  <th className="py-2 pr-4">Precio</th>
+                  <th className="py-2 pr-4">Estado</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {turnos
-                  .slice()
-                  .sort((a, b) => new Date(a.desde) - new Date(b.desde))
-                  .map((t) => {
-                    const d = new Date(t.desde);
-                    const s = byId.get(Number(t.servicio_id)) || t.servicio;
-                    return (
-                      <tr key={t.id}>
-                        <td className="py-2 pr-3">{d.toLocaleDateString("es-AR")}</td>
-                        <td className="py-2 pr-3">{d.toTimeString().slice(0, 5)}</td>
-                        <td className="py-2 pr-3">{t.cliente_nombre || "—"}</td>
-                        <td className="py-2 pr-3">{s?.nombre || "Servicio"}</td>
-                        <td className="py-2 pr-3 text-right">
-                          {money.format(Number(s?.precio) || 0)}
-                        </td>
-                      </tr>
-                    );
-                  })}
+              <tbody>
+                {tablaTurnos.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" className="py-6 text-center text-slate-500">
+                      Sin turnos en el período seleccionado.
+                    </td>
+                  </tr>
+                ) : (
+                  tablaTurnos.map((r) => (
+                    <tr key={r.id} className="border-t border-slate-100">
+                      <td className="py-2 pr-4 text-slate-800">{r.fecha}</td>
+                      <td className="py-2 pr-4 text-slate-800">{r.hora}</td>
+                      <td className="py-2 pr-4 text-slate-800">{r.cliente}</td>
+                      <td className="py-2 pr-4 text-slate-800">{r.servicio}</td>
+                      <td className="py-2 pr-4 text-slate-800">
+                        {r.estado === "cancelado" ? "—" : currency.format(r.precio || 0)}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <span
+                          className={[
+                            "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                            r.estado === "cancelado"
+                              ? "bg-slate-100 text-slate-600"
+                              : "bg-green-100 text-green-700",
+                          ].join(" ")}
+                        >
+                          {r.estado}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
-        )}
+        </section>
+
+        {/* Recomendaciones */}
+        <section className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <h3 className="text-base font-semibold text-slate-900 mb-2">Recomendaciones</h3>
+          <ul className="list-disc pl-5 text-sm text-slate-700 space-y-1">
+            <li>
+              <strong>Ticket promedio</strong> = promedio cobrado por turno confirmado del período.
+            </li>
+            <li>
+              Los gráficos por servicio usan sólo confirmados. El de <em>Estados</em> incluye cancelados.
+            </li>
+            <li>
+              Si tus precios vienen en centavos desde el back, avisame y lo ajusto (dividir por 100).
+            </li>
+          </ul>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function Card({ title, subtitle, children }) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-base font-semibold text-slate-900">{title}</h3>
+        {subtitle && <span className="text-xs text-slate-500">{subtitle}</span>}
       </div>
+      <div className="w-full h-72 md:h-80">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Donut({ data }) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <PieChart>
+        <Pie
+          data={data}
+          dataKey="value"
+          nameKey="name"
+          innerRadius="55%"
+          outerRadius="85%"
+          paddingAngle={2}
+          isAnimationActive
+          labelLine={false}
+          label={({ percent }) => `${Math.round((percent || 0) * 100)}%`}
+        >
+          {data.map((entry, idx) => (
+            <Cell key={`slice-${idx}`} fill={entry.color} />
+          ))}
+        </Pie>
+        <Tooltip
+          formatter={(v, n) => [typeof v === "number" ? v : 0, n]}
+          contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0" }}
+        />
+      </PieChart>
+    </ResponsiveContainer>
+  );
+}
+
+function KPI({ title, value }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="text-xs text-slate-500">{title}</div>
+      <div className="mt-1 text-xl font-semibold text-slate-900">{value}</div>
     </div>
   );
 }

@@ -1,7 +1,6 @@
-// src/layouts/PanelShell.jsx
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useUser } from "../context/UserContext";
+import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
+import { useUser } from "../context/UserContext.jsx"; // 👈 IMPORT UNIFICADO
 import Header from "../components/Header.jsx";
 import Footer from "../components/Footer.jsx";
 
@@ -12,9 +11,7 @@ const ItemLink = ({ to, children }) => (
     className={({ isActive }) =>
       [
         "block w-full text-left rounded-xl px-4 py-3 text-sm font-semibold transition shadow-sm",
-        isActive
-          ? "bg-white text-sky-700"
-          : "bg-white/10 text-white hover:bg-white/20",
+        isActive ? "bg-white text-sky-700" : "bg-white/10 text-white hover:bg-white/20",
       ].join(" ")
     }
   >
@@ -26,26 +23,19 @@ export default function PanelShell({ children }) {
   const { user, logout } = useUser();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const rol = String(user?.rol || "").toLowerCase();
+  const showReservarBtn = !rol || rol === "cliente";
 
-  // Si se usa como layout con rutas anidadas:
   const Content = children ?? <Outlet />;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-600 to-cyan-400">
-      {/* HEADER fijo arriba */}
       <Header />
 
-      {/* Contenido del panel (dejamos espacio top para el header fijo) */}
       <div className="pt-24 pb-16">
-        {/* CONTENEDOR IZQUIERDO
-            - En mobile: padding horizontal
-            - En lg+: pegado a la IZQUIERDA (pl-6) y SIN centrar (nada de mx-auto)
-            - El contenido usa grilla con sidebar fijo a la izquierda y área de trabajo expandida */}
         <div className="w-full px-4 lg:pl-6 lg:pr-0">
           <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6">
-            {/* Sidebar (tarjeta azul), pegado a la izquierda */}
             <aside className="lg:sticky lg:top-[88px] self-start">
-              {/* Toggle en mobile */}
               <div className="lg:hidden mb-3">
                 <button
                   onClick={() => setOpen((s) => !s)}
@@ -73,6 +63,7 @@ export default function PanelShell({ children }) {
                     <ItemLink to="/emprendimiento">Emprendimiento</ItemLink>
                     <ItemLink to="/turnos">Turnos</ItemLink>
                     <ItemLink to="/estadisticas">Estadísticas</ItemLink>
+                    
                   </div>
 
                   <div className="mt-4">
@@ -94,15 +85,23 @@ export default function PanelShell({ children }) {
               </div>
             </aside>
 
-            {/* Área de contenido: ocupa TODO el resto (más espacio para calendario) */}
             <section className="min-h-[60vh] min-w-0 bg-white/0">
+              {showReservarBtn && (
+                <div className="flex justify-end mb-3">
+                  <Link
+                    to="/reservar"
+                    className="rounded-full bg-gradient-to-r from-blue-500 to-emerald-400 text-white font-semibold px-4 py-2 shadow ring-1 ring-blue-300/40 hover:scale-[1.01] transition"
+                  >
+                    Reservar
+                  </Link>
+                </div>
+              )}
               {Content}
             </section>
           </div>
         </div>
       </div>
 
-      {/* FOOTER (no fijo): aparece siempre, el contenido no lo pisa */}
       <Footer />
     </div>
   );

@@ -1,16 +1,32 @@
-// Cliente axios único con token automático
+// src/services/http.js
 import axios from "axios";
 
+// Base URL del back: usa .env si existe, si no localhost
+const baseURL = import.meta?.env?.VITE_API_URL || "http://127.0.0.1:8000";
+
 const http = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://127.0.0.1:8000",
-  withCredentials: false,
+  baseURL,
+  timeout: 20000,
 });
 
-// Agrega el Bearer en cada request si existe el token
+// Adjunta token si existe
 http.interceptors.request.use((config) => {
-  const token = localStorage.getItem("turnate_token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  try {
+    const token = localStorage.getItem("accessToken");
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+  } catch {}
   return config;
 });
+
+// Manejo de errores con logging visible
+http.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    const status = error?.response?.status;
+    const data = error?.response?.data;
+    console.error(`[HTTP ${status || "ERR"}]`, data || error?.message || error);
+    return Promise.reject(error);
+  }
+);
 
 export default http;

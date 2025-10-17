@@ -12,15 +12,35 @@ const DIAS = [
   "Jueves", "Viernes", "Sábado",
 ];
 
+// --- Helpers ---
+function pad2(n){ return String(n).padStart(2, "0"); }
+
+function toHHMM(v) {
+  if (!v) return "";
+  // "09:00"
+  if (/^\d{2}:\d{2}$/.test(v)) return v;
+  // "09:00:00"
+  if (/^\d{2}:\d{2}:\d{2}$/.test(v)) return v.slice(0,5);
+  // ISO
+  const d = new Date(v);
+  if (!isNaN(d)) return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return "";
+}
+
 function validHHMM(v) {
   return /^\d{2}:\d{2}$/.test(v);
+}
+
+function hmToMinutes(hhmm) {
+  const [h,m] = hhmm.split(":").map(Number);
+  return h*60 + m;
 }
 
 export default function HoursModal({
   isOpen = true,
   open,
   onClose,
-  onSaved,              // se llama tras crear/editar/borrar
+  onSaved, // callback tras crear/editar/borrar
 }) {
   const visible = useMemo(() => (typeof isOpen === "boolean" ? isOpen : !!open), [isOpen, open]);
 
@@ -29,7 +49,7 @@ export default function HoursModal({
   const [err, setErr] = useState("");
 
   // Formulario
-  const blank = { id: null, dia_semana: 1, desde: "09:00", hasta: "13:00", activo: true };
+  const blank = { id: null, dia_semana: 1, desde: "09:00", hasta: "13:00", activo: true, intervalo_min: "" };
   const [form, setForm] = useState(blank);
   const editing = form.id !== null;
 
@@ -38,7 +58,16 @@ export default function HoursModal({
     setLoading(true);
     try {
       const data = await listMisHorarios();
-      setList(data || []);
+      // Normalizo y ordeno por día y hora
+      const norm = (data || []).map(h => ({
+        ...h,
+        dia_semana: Number(h.dia_semana ?? h.dia ?? 1),
+        desde: toHHMM(h.desde ?? h.inicio),
+        hasta: toHHMM(h.hasta ?? h.fin),
+        activo: h.activo ?? true,
+        intervalo_min: h.intervalo_min ?? h.intervalo ?? "",
+      })).sort((a,b) => (a.dia_semana - b.dia_semana) || (hmToMinutes(a.desde) - hmToMinutes(b.desde)));
+      setList(norm);
     } catch (e) {
       setErr(e?.response?.data?.detail || e?.message || "Error al cargar horarios");
     } finally {
@@ -57,18 +86,20 @@ export default function HoursModal({
   };
 
   const onEdit = (h) => {
+    setErr("");
     setForm({
       id: h.id,
-      dia_semana: h.dia_semana,
-      desde: h.desde?.slice(0, 5) || "09:00",
-      hasta: h.hasta?.slice(0, 5) || "13:00",
-      activo: h.activo ?? true,
+      dia_semana: Number(h.dia_semana),
+      desde: toHHMM(h.desde),
+      hasta: toHHMM(h.hasta),
+      activo: !!h.activo,
+      intervalo_min: h.intervalo_min ?? "",
     });
   };
 
   const onDelete = async (h) => {
     setErr("");
-    if (!confirm(`¿Eliminar el bloque de ${DIAS[h.dia_semana]} ${h.desde}–${h.hasta}?`)) return;
+    if (!confirm(`¿Eliminar el bloque de ${DIAS[h.dia_semana]} ${toHHMM(h.desde)}–${toHHMM(h.hasta)}?`)) return;
     try {
       await deleteHorario(h.id);
       await load();
@@ -78,26 +109,57 @@ export default function HoursModal({
     }
   };
 
+  // Evitar solapamientos dentro del mismo día
+  function overlaps(dia, desde, hasta, omitId = null) {
+    const a1 = hmToMinutes(desde);
+    const a2 = hmToMinutes(hasta);
+    return list.some(h => {
+      if (Number(h.dia_semana) !== Number(dia)) return false;
+      if (omitId && h.id === omitId) return false;
+      const b1 = hmToMinutes(toHHMM(h.desde));
+      const b2 = hmToMinutes(toHHMM(h.hasta));
+      // [a1,a2) solapa [b1,b2)?
+      return a1 < b2 && b1 < a2;
+    });
+  }
+
   const onSubmit = async (e) => {
     e.preventDefault();
     setErr("");
 
-    if (!validHHMM(form.desde) || !validHHMM(form.hasta)) {
+    const desde = toHHMM(form.desde);
+    const hasta = toHHMM(form.hasta);
+
+    if (!validHHMM(desde) || !validHHMM(hasta)) {
       setErr("Formato de hora inválido (usar HH:MM)");
       return;
     }
-    if (form.desde >= form.hasta) {
+    if (desde >= hasta) {
       setErr("El horario 'desde' debe ser menor a 'hasta'.");
+      return;
+    }
+    if (overlaps(form.dia_semana, desde, hasta, editing ? form.id : null)) {
+      setErr("Ese bloque se solapa con otro del mismo día.");
       return;
     }
 
     try {
-      const payload = {
+      const payloadBase = {
         dia_semana: Number.parseInt(form.dia_semana, 10),
-        desde: form.desde,
-        hasta: form.hasta,
+        desde,
+        hasta,
         activo: !!form.activo,
       };
+      // Compatibilidad: algunos back esperan inicio/fin
+      const payloadCompat = {
+        ...payloadBase,
+        inicio: desde,
+        fin: hasta,
+      };
+      // Intervalo opcional
+      const intervalo = String(form.intervalo_min || "").trim();
+      const payload = intervalo ? { ...payloadCompat, intervalo_min: Number(intervalo) } : payloadCompat;
+
       let res;
       if (editing) {
         res = await updateHorario(form.id, payload);
@@ -112,7 +174,7 @@ export default function HoursModal({
     }
   };
 
-  const onCancelEdit = () => setForm(blank);
+  const onCancelEdit = () => { setErr(""); setForm(blank); };
 
   if (!visible) return null;
 
@@ -135,6 +197,7 @@ export default function HoursModal({
                   <th className="px-3 py-2 text-left">Día</th>
                   <th className="px-3 py-2 text-left">Desde</th>
                   <th className="px-3 py-2 text-left">Hasta</th>
+                  <th className="px-3 py-2 text-left">Intervalo</th>
                   <th className="px-3 py-2 text-left">Activo</th>
                   <th className="px-3 py-2 text-right">Acciones</th>
                 </tr>
@@ -143,8 +206,9 @@ export default function HoursModal({
                 {list.map((h) => (
                   <tr key={h.id} className="border-t">
                     <td className="px-3 py-2">{DIAS[h.dia_semana] ?? h.dia_semana}</td>
-                    <td className="px-3 py-2">{h.desde?.slice(0, 5)}</td>
-                    <td className="px-3 py-2">{h.hasta?.slice(0, 5)}</td>
+                    <td className="px-3 py-2">{toHHMM(h.desde)}</td>
+                    <td className="px-3 py-2">{toHHMM(h.hasta)}</td>
+                    <td className="px-3 py-2">{h.intervalo_min ? `${h.intervalo_min} min` : "—"}</td>
                     <td className="px-3 py-2">{h.activo ? "Sí" : "No"}</td>
                     <td className="px-3 py-2 text-right space-x-2">
                       <button className="px-2 py-1 rounded bg-amber-500 text-white" onClick={() => onEdit(h)}>Editar</button>
@@ -154,7 +218,7 @@ export default function HoursModal({
                 ))}
                 {list.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-slate-500">Sin horarios aún</td>
+                    <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Sin horarios aún</td>
                   </tr>
                 )}
               </tbody>
@@ -163,7 +227,7 @@ export default function HoursModal({
         )}
 
         {/* Formulario */}
-        <form onSubmit={onSubmit} className="grid md:grid-cols-5 gap-3 mt-4">
+        <form onSubmit={onSubmit} className="grid md:grid-cols-6 gap-3 mt-4">
           <select
             className="border rounded-lg px-3 py-2"
             name="dia_semana"
@@ -192,6 +256,23 @@ export default function HoursModal({
             onChange={onChange}
             required
           />
+
+          {/* Intervalo opcional */}
+          <select
+            className="border rounded-lg px-3 py-2"
+            name="intervalo_min"
+            value={form.intervalo_min}
+            onChange={onChange}
+            title="Intervalo de atención (opcional)"
+          >
+            <option value="">Sin intervalo</option>
+            <option value="10">10 min</option>
+            <option value="15">15 min</option>
+            <option value="20">20 min</option>
+            <option value="30">30 min</option>
+            <option value="45">45 min</option>
+            <option value="60">60 min</option>
+          </select>
 
           <label className="inline-flex items-center gap-2">
             <input

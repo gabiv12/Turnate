@@ -1,13 +1,32 @@
 // src/pages/Turnos.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import api from "../services/api";
+import Calendario from "../hooks/Calendario";
 import { format, startOfDay, endOfDay } from "date-fns";
 import es from "date-fns/locale/es";
-import Calendario from "../hooks/Calendario";
-import { api } from "../services/api";
 import { AnimatePresence, motion } from "framer-motion";
 
 const cx = (...c) => c.filter(Boolean).join(" ");
+
+// Íconos inline minimal
+const IconLayers = (props) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
+    className="h-4 w-4" {...props}>
+    <path d="M12 3l8 4-8 4-8-4 8-4Z" />
+    <path d="M4 12l8 4 8-4" />
+    <path d="M4 17l8 4 8-4" />
+  </svg>
+);
+const IconClock = (props) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
+    className="h-4 w-4" {...props}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+);
 
 /* =========================================================
    SUGERENCIAS (ticker)
@@ -18,10 +37,11 @@ function SugerenciasTicker({ items = [], intervalMs = 4200 }) {
   const timer = useRef(null);
 
   useEffect(() => {
+    if (!items.length) return;
     timer.current = setInterval(() => {
       setFlash(true);
       setTimeout(() => setFlash(false), 220);
-      setIdx((i) => (i + 1) % (items.length || 1));
+      setIdx((i) => (i + 1) % items.length);
     }, intervalMs);
     return () => clearInterval(timer.current);
   }, [intervalMs, items.length]);
@@ -30,12 +50,10 @@ function SugerenciasTicker({ items = [], intervalMs = 4200 }) {
 
   return (
     <div className="select-none">
-      <div
-        className={cx(
-          "min-h-[26px] text-slate-800 text-sm leading-6 transition",
-          flash && "animate-pulse"
-        )}
-      >
+      <div className={cx(
+        "min-h-[26px] text-slate-800 text-sm leading-6 transition",
+        flash && "animate-pulse"
+      )}>
         <AnimatePresence mode="wait">
           <motion.div
             key={idx}
@@ -51,12 +69,9 @@ function SugerenciasTicker({ items = [], intervalMs = 4200 }) {
 
       <div className="mt-2 flex gap-1" aria-hidden="true">
         {items.map((_, i) => (
-          <span
-            key={i}
-            className={cx(
-              "h-1.5 w-1.5 rounded-full",
-              i === idx ? "bg-sky-500" : "bg-slate-300"
-            )}
+          <span key={i}
+            className={cx("h-1.5 w-1.5 rounded-full",
+              i === idx ? "bg-sky-500" : "bg-slate-300")}
           />
         ))}
       </div>
@@ -92,7 +107,7 @@ function Modal({ open, onClose, title, children }) {
 }
 
 /* =========================================================
-   FORMULARIO DE TURNO (CRUD)
+   FORMULARIO DE TURNO
    ========================================================= */
 function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
   const [form, setForm] = useState(() => {
@@ -113,7 +128,7 @@ function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
     return {
       servicio_id: f.servicio_id ? String(f.servicio_id) : "",
       fecha: fechaISO,
-      hora: hora,
+      hora,
       cliente_nombre: f.cliente_nombre || "",
       notas: f.notas || "",
     };
@@ -224,7 +239,7 @@ function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
       </label>
 
       <label className="block">
-        <span className="block text-sm font-medium text-slate-700">Sugerencias / Notas</span>
+        <span className="block text-sm font-medium text-slate-700">Notas</span>
         <textarea
           name="notas"
           rows={2}
@@ -257,62 +272,136 @@ function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
 }
 
 /* =========================================================
+   HELPERS
+   ========================================================= */
+const toDate = (v) => (v ? new Date(v) : null);
+function mapTurnoParaCalendario(t, servicios = []) {
+  const start =
+    toDate(t.inicio) || toDate(t.desde) || toDate(t.datetime) || new Date();
+  const durMin =
+    t?.servicio?.duracion_min ||
+    servicios.find((s) => s.id === Number(t.servicio_id))?.duracion_min ||
+    30;
+  const end =
+    toDate(t.fin) ||
+    toDate(t.hasta) ||
+    new Date(start.getTime() + durMin * 60000);
+
+  const nombreServicio =
+    t?.servicio?.nombre ||
+    servicios.find((s) => s.id === Number(t.servicio_id))?.nombre ||
+    t.titulo ||
+    "Servicio";
+
+  const cliente = t?.cliente?.nombre || t.cliente_nombre || "—";
+
+  return {
+    id: t.id,
+    title: `${cliente} · ${nombreServicio}`,
+    start,
+    end,
+    servicio_id: t.servicio_id ?? null,
+    servicio: nombreServicio,
+    cliente_nombre: cliente,
+    notas: t.notas ?? "",
+    raw: t,
+  };
+}
+
+/* =========================================================
    PÁGINA TURNOS
    ========================================================= */
 export default function Turnos() {
+  const navigate = useNavigate();
+
+  const [isEmprendedor, setIsEmprendedor] = useState(false);
+  const [owner, setOwner] = useState(null); // {id, codigo}
   const [servicios, setServicios] = useState([]);
+  const [horarios, setHorarios] = useState([]); // para sombrear días sin horario
   const [eventos, setEventos] = useState([]);
   const [selected, setSelected] = useState(null);
   const [openNew, setOpenNew] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const sugerencias = [
-    "Para agregar turnos, primero cargá tus Servicios y definí tus Horarios.",
+    "Cargá tus Servicios y definí Horarios antes de tomar turnos.",
     "Hacé clic en un turno para habilitar Editar / Cancelar.",
-    "Agregá notas en el turno para detalles del cliente.",
-    "Usá servicios con distinta duración para optimizar tu agenda.",
-    "Arrastrá en Semana/Día para crear un turno rápido (si lo soporta tu calendario).",
-    "Revisá los próximos 7 días para anticiparte a picos.",
-    "Confirmá asistencia desde el detalle del turno.",
+    "Agregá notas con detalles o preferencias del cliente.",
+    "Creá servicios con distinta duración para optimizar tu agenda.",
+    "Revisá la próxima semana para anticipar picos.",
     "Bloqueá feriados en Horarios para evitar reservas.",
   ];
 
-  // Carga inicial
+  // Detectar rol
+  useEffect(() => {
+    const uRaw = localStorage.getItem("user");
+    const u = uRaw ? JSON.parse(uRaw) : null;
+    if (String(u?.rol || "").toLowerCase() === "emprendedor") {
+      setIsEmprendedor(true);
+    }
+    (async () => {
+      try {
+        const me = await api.get("/emprendedores/mi");
+        if (me?.data?.id) {
+          setIsEmprendedor(true);
+          setOwner({ id: me.data.id, codigo: me.data.codigo_cliente });
+        } else {
+          setIsEmprendedor(false);
+          setOwner(null);
+        }
+      } catch {
+        // no emprendedor logueado
+        setIsEmprendedor(false);
+        setOwner(null);
+      }
+    })();
+  }, []);
+
+  // Carga inicial de servicios/horarios
   useEffect(() => {
     (async () => {
       try {
-        const rs = await api.get("/servicios/mis");
-        setServicios(rs.data || []);
-      } catch {}
-      try {
-        const now = new Date();
-        const desde = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1)).toISOString();
-        const hasta = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0)).toISOString();
-        const rt = await api.get(`/turnos/mis`, { params: { desde, hasta } });
-
-        const mapped = (rt.data || []).map((t) => {
-          const dur =
-            t?.servicio?.duracion_min ||
-            servicios.find((s) => s.id === Number(t.servicio_id))?.duracion_min ||
-            30;
-        return {
-            id: t.id,
-            title: `${t.cliente_nombre || t.cliente?.nombre || "—"} · ${t.servicio?.nombre || t.titulo || "Servicio"}`,
-            start: new Date(t.desde || t.datetime || t.inicio),
-            end: t.hasta || t.fin
-              ? new Date(t.hasta || t.fin)
-              : new Date(new Date(t.desde || t.datetime).getTime() + dur * 60000),
-            servicio: t.servicio?.nombre,
-            cliente_nombre: t.cliente?.nombre || t.cliente_nombre || "—",
-            notas: t.notas,
-            servicio_id: t.servicio_id,
-          };
-        });
-
-        setEventos(mapped);
+        if (isEmprendedor) {
+          const rs = await api.get("/servicios/mis");
+          setServicios(rs.data || []);
+          try {
+            const rh = await api.get("/horarios/mis");
+            setHorarios(rh.data || []);
+          } catch {}
+        } else {
+          setServicios([]);
+          setHorarios([]);
+        }
       } catch {}
     })();
-  }, []);
+  }, [isEmprendedor]);
+
+  // Helper range del mes visible (mes actual)
+  const monthRange = () => {
+    const now = new Date();
+    const desde = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1)).toISOString();
+    const hasta = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0)).toISOString();
+    return { desde, hasta };
+  };
+
+  // Refrescar eventos (propios si cliente / owner si emprendedor)
+  const refreshEventos = async () => {
+    try {
+      const { desde, hasta } = monthRange();
+      const url = isEmprendedor ? "/turnos/owner" : "/turnos/mis";
+      const rt = await api.get(url, { params: { desde, hasta } });
+      const data = Array.isArray(rt.data) ? rt.data : [];
+      setEventos(data.map((t) => mapTurnoParaCalendario(t, servicios)));
+    } catch (e) {
+      // opcional: console.warn(e);
+    }
+  };
+
+  // Primera carga de turnos + cada vez que cambian servicios (para duraciones)
+  useEffect(() => {
+    refreshEventos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEmprendedor, servicios.length]);
 
   const agendaDeHoy = useMemo(
     () =>
@@ -332,35 +421,78 @@ export default function Turnos() {
   const onSelectEvent = (evt) => setSelected(evt);
   const onSelectSlot = () => {
     setSelected(null);
-    setOpenNew(true);
+    if (isEmprendedor) setOpenNew(true);
+  };
+
+  // Sombrear días sin horario (si Calendario soporta dayPropGetter)
+  const enabledWeekdays = useMemo(() => {
+    const set = new Set(
+      (horarios || [])
+        .filter((h) => h.activo !== false)
+        .map((h) => Number(h.dia_semana))
+    );
+    return set;
+  }, [horarios]);
+  const dayPropGetter = (date) => {
+    if (!isEmprendedor) return {};
+    const wd = date.getDay(); // 0=Dom..6=Sab
+    if (!enabledWeekdays.has(wd)) {
+      return {
+        style: {
+          backgroundColor: "#f3f4f6", // slate-100
+          color: "#9ca3af", // slate-400
+        },
+      };
+    }
+    return {};
   };
 
   const crearTurno = async (payload) => {
     try {
       setLoading(true);
-      const res = await api.post("/turnos", payload);
-      const t = res.data;
-      const dur =
-        t?.servicio?.duracion_min ||
-        servicios.find((s) => s.id === payload.servicio_id)?.duracion_min ||
-        30;
+      // Para compat: enviamos datetime, servicio_id, cliente_nombre, notas y, si lo tenemos, emprendedor_id
+      const body = {
+        servicio_id: payload.servicio_id,
+        datetime: payload.datetime, // el back calcula fin
+        cliente_nombre: payload.cliente_nombre,
+        notas: payload.notas,
+        ...(owner?.id ? { emprendedor_id: owner.id } : {}),
+      };
+      await api.post("/turnos/compat", body);
 
-      setEventos((prev) => [
-        ...prev,
-        {
-          id: t.id,
-          title: `${t.cliente_nombre || payload.cliente_nombre || "—"} · ${t.servicio?.nombre || (servicios.find(s => s.id === payload.servicio_id)?.nombre) || "Servicio"}`,
-          start: new Date(t.desde || payload.datetime),
-          end: new Date(new Date(payload.datetime).getTime() + dur * 60000),
-          servicio: t.servicio?.nombre || (servicios.find(s => s.id === payload.servicio_id)?.nombre),
-          cliente_nombre: t.cliente?.nombre || t.cliente_nombre || payload.cliente_nombre || "—",
-          notas: payload.notas || "",
-          servicio_id: payload.servicio_id,
-        },
-      ]);
+      await refreshEventos(); // me aseguro de ver el turno nuevo
       setOpenNew(false);
+      alert("Turno creado con éxito.");
+    } catch (e) {
+      alert("No se pudo crear el turno.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const editarTurno = async (payload) => {
+    if (!selected) return;
+    try {
+      setLoading(true);
+      // Para PATCH armamos inicio/fin (por si el back lo requiere)
+      const dur =
+        servicios.find((s) => s.id === payload.servicio_id)?.duracion_min || 30;
+      const inicio = new Date(payload.datetime);
+      const fin = new Date(inicio.getTime() + dur * 60000);
+      await api.patch(`/turnos/${selected.id}`, {
+        inicio: inicio.toISOString(),
+        fin: fin.toISOString(),
+        servicio_id: payload.servicio_id,
+        cliente_nombre: payload.cliente_nombre,
+        notas: payload.notas,
+      });
+
+      await refreshEventos();
+      setSelected(null);
+      setOpenNew(false);
+      alert("Turno actualizado.");
     } catch {
-      alert("No se pudo crear el turno");
+      alert("No se pudo actualizar el turno.");
     } finally {
       setLoading(false);
     }
@@ -373,14 +505,47 @@ export default function Turnos() {
       await api.delete(`/turnos/${selected.id}`);
       setEventos((prev) => prev.filter((e) => e.id !== selected.id));
       setSelected(null);
+      alert("Turno eliminado con éxito.");
     } catch {
-      alert("No se pudo eliminar");
+      alert("No se pudo eliminar el turno.");
     }
   };
 
+  // CLIENTE (agenda solo de visualización + botón reservar)
+  if (!isEmprendedor) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-sm text-slate-700">
+              Para reservar, ingresá el <b>código</b> del emprendimiento.
+            </div>
+            <button
+              onClick={() => navigate("/reservar")}
+              className="rounded-xl bg-sky-600 text-white px-4 py-2.5 text-sm font-semibold"
+            >
+              Sacar turno
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+          <Calendario
+            turnos={eventos}
+            onSelectEvent={onSelectEvent}
+            onSelectSlot={() => {}}
+            defaultView="month"
+            height={760}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // EMPRENDEDOR
   return (
     <div className="space-y-4">
-      {/* HEADER ancho */}
+      {/* HEADER ancho (igual visual) */}
       <div className="-mx-4 lg:-mx-6 overflow-x-clip">
         <div className="rounded-3xl bg-gradient-to-r from-blue-600 to-cyan-400 p-5 md:p-6 text-white shadow">
           <div className="mx-auto max-w-7xl px-4 lg:px-6">
@@ -395,25 +560,16 @@ export default function Turnos() {
               </div>
 
               <div className="flex items-center gap-2">
-                <Link
-                  to="/servicios"
-                  className="inline-flex items-center gap-2 rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-extrabold ring-2 ring-white/80 shadow hover:brightness-95 focus-visible:ring-4 focus-visible:ring-white"
-                  aria-label="Ir a Servicios"
-                >
-                  <span aria-hidden>🧰</span> <span>Servicios</span>
+                <Link to="/servicios" className="inline-flex items-center gap-2 rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-extrabold ring-2 ring-white/80 shadow hover:brightness-95 focus-visible:ring-4 focus-visible:ring-white" aria-label="Ir a Servicios">
+                  <IconLayers /> <span>Servicios</span>
                 </Link>
-                <Link
-                  to="/horarios"
-                  className="inline-flex items-center gap-2 rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-extrabold ring-2 ring-white/80 shadow hover:brightness-95 focus-visible:ring-4 focus-visible:ring-white"
-                  aria-label="Ir a Horarios"
-                >
-                  <span aria-hidden>⏱️</span> <span>Horarios</span>
+
+                <Link to="/horarios" className="inline-flex items-center gap-2 rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-extrabold ring-2 ring-white/80 shadow hover:brightness-95 focus-visible:ring-4 focus-visible:ring-white" aria-label="Ir a Horarios">
+                  <IconClock /> <span>Horarios</span>
                 </Link>
+
                 <button
-                  onClick={() => {
-                    setSelected(null);
-                    setOpenNew(true);
-                  }}
+                  onClick={() => { setSelected(null); setOpenNew(true); }}
                   className="rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-semibold shadow hover:brightness-95"
                 >
                   + Agregar turno
@@ -432,10 +588,12 @@ export default function Turnos() {
           <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
             <Calendario
               turnos={eventos}
-              onSelectEvent={onSelectEvent}
+              onSelectEvent={(e) => setSelected(e)}
               onSelectSlot={onSelectSlot}
               defaultView="month"
               height={760}
+              // sombreamos días sin horario (si el wrapper lo soporta)
+              dayPropGetter={dayPropGetter}
             />
           </div>
         </div>
@@ -461,24 +619,21 @@ export default function Turnos() {
           {/* Acciones de turnos */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 font-medium text-slate-700">Acciones de turnos</div>
-            <p className="mb-3 text-xs text-slate-500">
-              Para <b>agregar</b>, seleccioná un bloque en el calendario. Para{" "}
-              <b>editar</b> o <b>cancelar</b>, hacé click en el turno y luego presioná el botón.
-            </p>
+
+            <ul className="mb-3 text-xs text-slate-500 space-y-1.5">
+              <li>• Para <b>agregar</b>, seleccioná un bloque en el calendario o usá el botón.</li>
+              <li>• Para <b>editar</b> o <b>posponer</b>, hacé click en un turno y luego “Editar / Posponer”.</li>
+              <li>• Para <b>cancelar</b>, seleccioná un turno y tocá “Cancelar”.</li>
+            </ul>
 
             <div className="grid grid-cols-1 gap-2">
-              {/* Principal */}
               <button
-                onClick={() => {
-                  setSelected(null);
-                  setOpenNew(true);
-                }}
-                className="w-full rounded-xl bg-sky-600 px-3 py-2.5 text-sm font-semibold text-white shadow focus:outline-none focus-visible:ring-4 focus-visible:ring-sky-300/50 hover:bg-sky-700"
+                onClick={() => { setSelected(null); setOpenNew(true); }}
+                className="w-full rounded-xl bg-sky-600 px-3 py-2.5 text-sm font-semibold text-white shadow focus-visible:ring-4 focus-visible:ring-sky-300/50 hover:bg-sky-700"
               >
                 + Agregar turno
               </button>
 
-              {/* Editar / Posponer (violeta/indigo). Siempre con color; deshabilitado = opaco */}
               <button
                 disabled={!selected}
                 onClick={() => setOpenNew(true)}
@@ -491,7 +646,6 @@ export default function Turnos() {
                 Editar / Posponer
               </button>
 
-              {/* Cancelar (rojo degradé como PanelShell). Siempre con color; deshabilitado = opaco */}
               <button
                 disabled={!selected}
                 onClick={eliminarTurno}
@@ -505,14 +659,23 @@ export default function Turnos() {
               </button>
             </div>
 
-            <div className="mt-3 text-xs text-slate-500">
-              {selected
-                ? "Turno seleccionado listo para acciones."
-                : "Elegí un turno del calendario para ver acciones."}
+            <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+              <span>
+                {selected
+                  ? "Turno seleccionado listo para acciones."
+                  : "Elegí un turno del calendario para ver acciones."}
+              </span>
+              <button
+                onClick={refreshEventos}
+                className="underline underline-offset-2 hover:text-slate-700"
+                title="Actualizar"
+              >
+                Actualizar
+              </button>
             </div>
           </div>
 
-          {/* Agenda de hoy (cliente · servicio dentro del bloque) */}
+          {/* Agenda de hoy */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 font-medium text-slate-700">
               Agenda de hoy · {format(new Date(), "EEEE d 'de' MMMM", { locale: es })}
@@ -535,7 +698,7 @@ export default function Turnos() {
             )}
           </div>
 
-          {/* Sugerencias más visibles (degradé suave) */}
+          {/* Sugerencias */}
           <div className="rounded-2xl p-[1px] bg-gradient-to-r from-sky-200 via-cyan-200 to-emerald-200 shadow-sm">
             <div className="rounded-2xl bg-white p-4">
               <SugerenciasTicker items={sugerencias} />
@@ -566,39 +729,7 @@ export default function Turnos() {
           onCancel={() => setOpenNew(false)}
           onSubmit={async (payload) => {
             if (selected) {
-              try {
-                setLoading(true);
-                await api.patch(`/turnos/${selected.id}`, payload);
-
-                const dur =
-                  servicios.find((s) => s.id === payload.servicio_id)?.duracion_min || 30;
-
-                setEventos((prev) =>
-                  prev.map((e) =>
-                    e.id === selected.id
-                      ? {
-                          ...e,
-                          title: `${payload.cliente_nombre || "—"} · ${
-                            servicios.find((s) => s.id === payload.servicio_id)?.nombre || "Servicio"
-                          }`,
-                          start: new Date(payload.datetime),
-                          end: new Date(new Date(payload.datetime).getTime() + dur * 60000),
-                          cliente_nombre: payload.cliente_nombre,
-                          notas: payload.notas,
-                          servicio_id: payload.servicio_id,
-                          servicio:
-                            servicios.find((s) => s.id === payload.servicio_id)?.nombre || e.servicio,
-                        }
-                      : e
-                  )
-                );
-                setSelected(null);
-                setOpenNew(false);
-              } catch {
-                alert("No se pudo actualizar");
-              } finally {
-                setLoading(false);
-              }
+              await editarTurno(payload);
             } else {
               await crearTurno(payload);
             }

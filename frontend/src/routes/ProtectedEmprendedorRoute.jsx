@@ -1,26 +1,41 @@
-import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { useUser } from "../context/UserContext";
+// src/routes/ProtectedEmprendedorRoute.jsx
+import React, { useContext, useEffect, useState } from "react";
+import { Outlet, Navigate, useLocation } from "react-router-dom";
+import { UserContext } from "../context/UserContext";
+import api, { readToken, setToken } from "../components/api";
 
-export default function ProtectedRoute({ children }) {
-  const { user, loading } = useUser();
+export default function ProtectedEmprendedorRoute() {
+  const { user } = useContext(UserContext) || {};
   const location = useLocation();
+  const [status, setStatus] = useState(
+    user?.rol === "emprendedor" ? "allow" : "pending"
+  );
 
-  // Esperá a que el contexto termine de inicializar (evita redirecciones temblorosas)
-  if (loading) return null;
+  useEffect(() => {
+    if (status !== "pending") return;
 
-  // Si NO hay user y por error se envolvió /login o /registro, NO redirijas (evita loop)
-  if (
-    !user &&
-    (location.pathname === "/login" || location.pathname === "/registro")
-  ) {
-    return children ?? <Outlet />;
-  }
+    const t = readToken();
+    if (!t) {
+      setStatus("deny");
+      return;
+    }
+    setToken(t);
 
-  // Si NO hay user: mandá a /login una sola vez
-  if (!user) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
-  }
+    // Si no es rol emprendedor, verificamos en el backend si tiene registro
+    api
+      .get("/emprendedores/mi")
+      .then((r) => {
+        const hasEmp = r?.data && (r.data.id || r.data.usuario_id);
+        setStatus(hasEmp ? "allow" : "deny");
+      })
+      .catch(() => setStatus("deny"));
+  }, [status]);
 
-  // Autenticado: render normal
-  return children ?? <Outlet />;
+  if (status === "pending") return null; // o un loader si preferís
+
+  return status === "allow" ? (
+    <Outlet />
+  ) : (
+    <Navigate to="/perfil" replace state={{ from: location, needEmp: true }} />
+  );
 }

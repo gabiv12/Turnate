@@ -1,53 +1,229 @@
+/* -----------------------------------------------------------
+   Tailwind base
+----------------------------------------------------------- */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* ===== ajustes globales ===== */
-html, body, #root { height: 100%; }
-body { @apply bg-slate-50 text-slate-900 antialiased; }
-a { @apply text-blue-600 hover:text-blue-700 no-underline; }
-
-/* ===== anti-scroll lateral global ===== */
-html, body, #root {
-  width: 100%;
-  max-width: 100%;
-  overflow-x: hidden;
+/* -----------------------------------------------------------
+   Base global
+----------------------------------------------------------- */
+:root {
+  color-scheme: light;
 }
 
-/* ===== Calendario (react-big-calendar) – retoques ===== */
-.calendario-wrapper .rbc-toolbar {
-  gap: 12px;
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-800 antialiased;
+  /* Evita doble scroll general y “rebote” en mobile */
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+a {
+  @apply text-sky-700 hover:text-sky-800;
+}
+
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible {
+  @apply outline-none ring-2 ring-sky-300;
+  border-radius: 0.5rem;
+}
+
+/* Contenedor genérico opcional (si no usás uno propio) */
+.container-page {
+  @apply mx-auto max-w-7xl px-4 lg:px-6;
+}
+
+/* Cartas genéricas reusables */
+.card {
+  @apply rounded-2xl bg-white border border-slate-200 shadow-sm;
+}
+
+/* Bloquear scroll cuando hay modal (si lo necesitás) */
+body.modal-open {
+  overflow: hidden;
+}
+
+/* -----------------------------------------------------------
+   Calendario (react-big-calendar) – Tweaks y fix scroll
+----------------------------------------------------------- */
+/* Fuente un poco más compacta */
+.rbc-calendar {
+  font-size: 0.92rem;
+}
+
+/* Toolbar limpia y responsive */
+.rbc-toolbar {
+  gap: .5rem;
   flex-wrap: wrap;
 }
-.calendario-wrapper .rbc-toolbar .rbc-toolbar-label {
-  font-weight: 600;
-  color: #0f172a; /* slate-900 */
+.rbc-toolbar button {
+  @apply rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50;
 }
-.calendario-wrapper .rbc-btn-group > button {
-  background: #ffffff;
-  border: 1px solid #e5e7eb; /* gray-200 */
-  border-radius: 0.6rem;
-  padding: 0.45rem 0.75rem;
-  line-height: 1;
-  transition: background .15s ease, color .15s ease, border-color .15s ease;
-}
-.calendario-wrapper .rbc-btn-group > button:hover {
-  background: #f3f4f6; /* gray-100 */
-}
-.calendario-wrapper .rbc-btn-group > button.rbc-active {
-  background: #2563eb;  /* blue-600 */
-  border-color: #1d4ed8; /* blue-700 */
-  color: #fff;
-}
-.calendario-wrapper .rbc-agenda-view table.rbc-agenda-table td,
-.calendario-wrapper .rbc-agenda-view table.rbc-agenda-table th {
-  font-size: 0.95rem;
+.rbc-toolbar .rbc-active {
+  @apply bg-sky-600 text-white border-sky-600;
 }
 
-/* react-big-calendar no debe forzar min-width */
-.rbc-calendar { width: 100% !important; }
-.rbc-time-view,
-.rbc-month-view,
-.rbc-time-header-content {
-  min-width: 0 !important;
+/* Día de hoy con leve resaltado */
+.rbc-today {
+  background: rgba(2, 132, 199, 0.06);
+}
+
+/* Eventos más “chips” */
+.rbc-event {
+  @apply rounded-lg bg-sky-600/90 text-white px-1.5 py-0.5;
+  box-shadow: 0 2px 6px rgba(2, 132, 199, .15);
+}
+.rbc-event.rbc-selected {
+  @apply ring-2 ring-sky-300;
+}
+
+/* Líneas y bordes suaves */
+.rbc-time-header {
+  border-radius: 12px 12px 0 0;
+}
+.rbc-time-content > * + * > * {
+  border-left: 1px solid #e5e7eb;
+}
+.rbc-time-slot {
+  border-color: #e5e7eb;
+}
+.rbc-off-range-bg {
+  background: #f8fafc;
+}
+
+/* Evitar scroll interno del calendario (fix doble scroll) */
+.rbc-time-view .rbc-time-content {
+  overflow: visible;
+}
+
+/* Agenda view un poco más legible */
+.rbc-agenda-view table {
+  font-size: .9rem;
+}
+.rbc-agenda-date-cell,
+.rbc-agenda-time-cell {
+  color: #334155;
+}
+
+/* Si tu wrapper del calendario tiene overflow, anulalo */
+.calendar-wrapper,
+.rbc-time-content {
+  overflow: visible !important;
+}
+
+/* -----------------------------------------------------------
+   “Hero”/cabecera para Reservar y foto sin recortes
+----------------------------------------------------------- */
+.booking-hero {
+  @apply card p-0 overflow-hidden;
+}
+
+/* Contenedor visual de la imagen */
+.booking-hero__media {
+  position: relative;
+  width: 100%;
+  background: #f1f5f9; /* gris suave de fondo por si la imagen es transparente */
+}
+
+/* Imagen de /images/ReservaCodigo.png sin cortes */
+.booking-hero__media img {
+  width: 100%;
+  max-height: 240px;      /* altura controlada en mobile */
+  object-fit: contain;    /* => no recorta, encaja completa */
+  object-position: center;
+}
+
+@media (min-width: 768px) {
+  .booking-hero__media img {
+    max-height: 300px;    /* un poco más grande en md+ */
+  }
+}
+
+.booking-hero__body {
+  @apply p-4 md:p-6;
+}
+.booking-hero__title {
+  @apply text-xl md:text-2xl font-semibold text-slate-900;
+}
+.booking-hero__meta {
+  @apply text-sm text-slate-500;
+}
+
+/* -----------------------------------------------------------
+   Pasos/Stepper liviano (para Reservar)
+----------------------------------------------------------- */
+.steps {
+  @apply flex items-center gap-2 text-sm text-slate-600;
+}
+.steps__dot {
+  @apply h-2 w-2 rounded-full bg-slate-300;
+}
+.steps__dot--active {
+  @apply bg-sky-500;
+}
+
+/* -----------------------------------------------------------
+   Sidebar sticky: en pantallas chicas dejalo normal
+----------------------------------------------------------- */
+@media (max-width: 1279px) {
+  .xl\:sticky { position: static !important; }
+}
+
+/* -----------------------------------------------------------
+   Scrollbar (Chromium) — opcional
+----------------------------------------------------------- */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+  border: 2px solid #f1f5f9;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Ocultar scrollbar cuando quieras (Firefox + WebKit) */
+.hide-scrollbar {
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* -----------------------------------------------------------
+   Helpers pequeños
+----------------------------------------------------------- */
+.hr-soft {
+  height: 1px;
+  background: linear-gradient(to right, transparent, #e5e7eb, transparent);
+  border: 0;
+}
+
+.text-muted {
+  @apply text-slate-500;
+}
+
+.btn-plain {
+  @apply rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50;
+}
+.btn-primary {
+  @apply rounded-xl bg-sky-600 text-white px-4 py-2.5 text-sm font-semibold hover:bg-sky-700;
 }
