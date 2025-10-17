@@ -1,5 +1,5 @@
 // src/components/Calendario.jsx
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import {
   format as dfFormat,
@@ -21,7 +21,7 @@ const localizer = dateFnsLocalizer({
   locales,
 });
 
-// Traducciones de la UI del calendario
+// Traducciones
 const messagesES = {
   date: "Fecha",
   time: "Hora",
@@ -44,17 +44,52 @@ const messagesES = {
 export default function Calendario({
   // datos
   turnos = [], // [{title, start: Date, end: Date, ...}]
-  // callbacks
+  // callbacks (opcionales)
   onSelectEvent,
   onSelectSlot,
   onRangeChange,
+  onNavigate, // opcional: el padre puede escuchar navegación
+  onView,     // opcional: el padre puede escuchar cambio de vista
   // opciones visuales
   defaultView = "month",
+  initialDate, // opcional: fecha inicial distinta de hoy
   height = 700,
   eventPropGetter,
   dayPropGetter,
 }) {
-  // Aseguramos que los eventos tengan Date válidas
+  // --- CONTROL EXPLÍCITO DE FECHA Y VISTA (fix toolbar) ---
+  const [currentDate, setCurrentDate] = useState(() => initialDate ? new Date(initialDate) : new Date());
+  const [view, setView] = useState(() => {
+    const v = String(defaultView || "month").toLowerCase();
+    return ["month", "week", "day", "agenda"].includes(v) ? v : "month";
+  });
+
+  const handleNavigate = useCallback(
+    (newDate, newView) => {
+      setCurrentDate(new Date(newDate));
+      // avisar al padre si lo necesita
+      onNavigate?.(newDate, newView || view);
+    },
+    [onNavigate, view]
+  );
+
+  const handleView = useCallback(
+    (newView) => {
+      const v = String(newView || "month").toLowerCase();
+      setView(v);
+      onView?.(v);
+    },
+    [onView]
+  );
+
+  const handleRangeChange = useCallback(
+    (range, newView) => {
+      onRangeChange?.(range, newView || view);
+    },
+    [onRangeChange, view]
+  );
+
+  // Aseguramos Date válidas
   const events = useMemo(() => {
     return (turnos || [])
       .map((e) => ({
@@ -69,28 +104,41 @@ export default function Calendario({
     <div className="w-full" style={{ height }}>
       <Calendar
         localizer={localizer}
+        culture="es"
         messages={messagesES}
+        // CONTROLADOS: si el padre re-renderiza, el calendario mantiene su estado
+        date={currentDate}
+        onNavigate={handleNavigate}
+        view={view}
+        onView={handleView}
+        // Vistas habilitadas
         defaultView={defaultView}
         views={[Views.MONTH, Views.WEEK, Views.DAY, Views.AGENDA]}
+        // Datos
         events={events}
         startAccessor="start"
         endAccessor="end"
+        // Interacción
         popup
         selectable
         longPressThreshold={220}
         onSelectEvent={onSelectEvent}
         onSelectSlot={onSelectSlot}
-        onRangeChange={onRangeChange}
+        onRangeChange={handleRangeChange}
+        // Estilos por evento / día (si los pasás)
         eventPropGetter={eventPropGetter}
         dayPropGetter={dayPropGetter}
-        toolbar
+        // Agenda / grilla
         step={30}
         timeslots={2}
+        // Formatos
         formats={{
           timeGutterFormat: (date) => dfFormat(date, "HH:mm", { locale: es }),
           eventTimeRangeFormat: ({ start, end }) =>
             `${dfFormat(start, "HH:mm", { locale: es })} – ${dfFormat(end, "HH:mm", { locale: es })}`,
         }}
+        // Importante: mantener la toolbar activa
+        toolbar
       />
     </div>
   );
