@@ -6,10 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine
 from app import models
 from app.routers import usuarios, emprendedores, servicios, horarios, turnos
-
+from app.routers import public_agenda
+from app.routers import public_servicios 
 # ---------- App ----------
 app = FastAPI(title="Turnate API")
-
+app.include_router(public_agenda.router)
 # ---------- CORS ----------
 # Podés setear ORIGINS por env separado por comas. Ej:
 # ORIGINS=http://localhost:5173,http://127.0.0.1:5173
@@ -42,7 +43,8 @@ app.include_router(emprendedores.router)
 app.include_router(servicios.router)
 app.include_router(horarios.router)
 app.include_router(turnos.router)
-
+app.include_router(public_agenda.router)
+app.include_router(public_servicios.router)
 # ---------- Health check ----------
 @app.get("/health")
 def health():

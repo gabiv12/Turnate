@@ -1,26 +1,62 @@
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
-from passlib.hash import bcrypt
-from jose import jwt, JWTError
+# app/auth.py
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
-SECRET_KEY = "devsecretkey"   # cambia en prod
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+from app.database import get_db
+from app.core.security import verify_password, create_access_token
+from app import models
 
-def hash_password(plain: str) -> str:
-    return bcrypt.hash(plain)
+router = APIRouter(tags=["auth"])
 
-def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.verify(plain, hashed)
+def _find_user(db: Session, username: Optional[str], email: Optional[str]):
+    user = None
+    if email:
+        try:
+            user = db.query(models.Usuario).filter(models.Usuario.email == email).first()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        if not user:
+            try:
+                user = db.query(models.User).filter(models.User.email == email).first()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    if not user and username:
+        try:
+            user = db.query(models.Usuario).filter(models.Usuario.username == username).first()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        if not user:
+            try:
+                user = db.query(models.User).filter(models.User.username == username).first()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    return user
 
-def create_access_token(data: Dict[str, Any], expires_minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=expires_minutes)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+def _user_dict(u) -> dict:
+    # normalizamos conceptos comunes
+    return {
+        "id": getattr(u, "id", None),
+        "username": getattr(u, "username", None),
+        "email": getattr(u, "email", None),
+        "rol": getattr(u, "rol", None) or getattr(u, "role", None) or "cliente",
+        "nombre": getattr(u, "nombre", None) or getattr(u, "name", None),
+        "telefono": getattr(u, "telefono", None) or getattr(u, "phone", None),
+        "avatar_url": getattr(u, "avatar_url", None) or getattr(u, "foto_url", None),
+    }
 
-def decode_token(token: str) -> Optional[Dict[str, Any]]:
-    try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
-        return None
+@router.post("/usuarios/login")
+@router.post("/auth/login")
+def login(payload: dict, db: Session = Depends(get_db)):
+    username = payload.get("username")
+    email = payload.get("email")
+    password = payload.get("password")
+    if not password or not (username or email):
+        raise HTTPException(status_code=422, detail="Faltan credenciales")
+
+    user = _find_user(db, username, email)
+    if not user or not verify_password(password, getattr(user, "hashed_password", "")):
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+    token = create_access_token({"sub": str(user.id)})
+    return {"access_token": token, "token_type": "bearer", "user": _user_dict(user)}

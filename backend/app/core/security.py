@@ -1,12 +1,23 @@
-from datetime import datetime, timedelta, timezone
-from jose import jwt, JWTError
+# app/core/security.py
+from app.security import (
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    decode_access_token,
+    get_user_id_from_token,
+)
+from app.config import settings
 
-SECRET_KEY = "cambia_esto_por_un_valor_largo_y_secreto"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+# Reexportamos las constantes por compatibilidad con imports viejos
+SECRET_KEY = settings.SECRET_KEY
+ALGORITHM = settings.ALGORITHM
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+__all__ = [
+    "verify_password",
+    "get_password_hash",
+    "create_access_token",
+    "decode_access_token",
+    "get_user_id_from_token",
+    "SECRET_KEY",
+    "ALGORITHM",
+]

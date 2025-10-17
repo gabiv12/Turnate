@@ -1,6 +1,8 @@
 from datetime import datetime, time
 from typing import Optional, List
 from pydantic import BaseModel, Field, constr, ConfigDict  # ⬅️ agregamos ConfigDict
+from datetime import datetime, date, time   # ← sumá "date"
+from pydantic import BaseModel, Field, constr, ConfigDict, model_validator  # ← sumá "model_validator"
 
 # ---------- Auth ----------
 class TokenOut(BaseModel):
@@ -130,3 +132,30 @@ class TurnoOut(TurnoBase):
 
     # class Config: orm_mode = True
     model_config = ConfigDict(from_attributes=True)
+class TurnoCreateFlexible(BaseModel):
+    servicio_id: int
+
+    # variantes aceptadas desde el front
+    inicio: Optional[datetime] = None
+    fin: Optional[datetime] = None
+    desde: Optional[datetime] = None
+    hasta: Optional[datetime] = None
+    datetime: Optional[datetime] = None
+    fecha: Optional[date] = None
+    hora: Optional[str] = None  # "HH:mm"
+
+    # datos cliente / notas
+    cliente_nombre: Optional[str] = None
+    cliente_telefono: Optional[str] = None
+    notas: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _unify(self) -> "TurnoCreateFlexible":
+        # unificamos todo a "inicio/fin"
+        i = self.inicio or self.desde or self.datetime
+        if not i and self.fecha and self.hora:
+            hh, mm = (self.hora or "00:00").split(":", 1)
+            i = datetime.combine(self.fecha, time(int(hh), int(mm)))
+        self.inicio = i
+        self.fin = self.fin or self.hasta
+        return self

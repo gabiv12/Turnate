@@ -1,206 +1,141 @@
-# app/routers/usuarios.py
-from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
-from sqlalchemy.orm import Session
+from app.database import get_db
+from app import models
 
-from app.database import SessionLocal
-from app.models import Usuario, RolUsuario  # ✅ archivo único models.py
+# Import flexible: usa core.security si existe; sino app.security
+try:
+    from app.core.security import get_password_hash, verify_password, create_access_token
+except Exception:  # pragma: no cover
+    from app.security import get_password_hash, verify_password, create_access_token  # type: ignore
 
 router = APIRouter(prefix="/usuarios", tags=["usuarios"])
 
-# =======================
-# Config / Security
-# =======================
-# ⚠️ Reemplazá este SECRET_KEY por uno propio
-SECRET_KEY = "CHANGE_ME_SUPER_SECRET_KEY_32CHARS_MIN"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24h
+# --------- helpers ---------
+def _get_user_by_email_or_username(db: Session, email: Optional[str], username: Optional[str]) -> Optional[models.Usuario]:
+    q = db.query(models.Usuario)
+    if email:
+        u = q.filter(models.Usuario.email == email).first()
+        if u:
+            return u
+    if username:
+        u = db.query(models.Usuario).filter(models.Usuario.username == username).first()
+        if u:
+            return u
+    return None
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/usuarios/login")
+def _user_to_dict(u: models.Usuario) -> dict:
+    """No exponemos el hash. Hacemos salida que el front entiende."""
+    d = {
+        "id": getattr(u, "id", None),
+        "username": getattr(u, "username", None),
+        "email": getattr(u, "email", None),
+        "rol": getattr(u, "rol", None) or getattr(u, "role", None) or "cliente",
+    }
+    # Mantener compatibilidad con claves antiguas
+    return d
 
-# =======================
-# DB Dependency
-# =======================
-def get_db():
-    db = SessionLocal()
+def _set_password(u: models.Usuario, raw_password: str):
+    h = get_password_hash(raw_password)
+    # tolerante al nombre del campo
+    if hasattr(u, "hashed_password"):
+        setattr(u, "hashed_password", h)
+    elif hasattr(u, "password_hash"):
+        setattr(u, "password_hash", h)
+    else:
+        # último recurso: campo 'password' en BD (no recomendado, pero común)
+        setattr(u, "password", h)
+
+def _get_password_hash_value(u: models.Usuario) -> Optional[str]:
+    for attr in ("hashed_password", "password_hash", "password"):
+        if hasattr(u, attr):
+            return getattr(u, attr)
+    return None
+
+# --------- endpoints ---------
+
+@router.post("/login")
+def login(payload: dict, db: Session = Depends(get_db)):
+    """
+    Acepta:
+      { "email": "...", "password": "..." }  ó  { "username": "...", "password": "..." }
+    Devuelve:
+      { "user": {...}, "token": "..." }  (y además "user_schema" por compatibilidad)
+    """
+    email = (payload.get("email") or "").strip() or None
+    username = (payload.get("username") or "").strip() or None
+    password = payload.get("password") or ""
+
+    if not (email or username) or not password:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Email/usuario y contraseña son obligatorios")
+
+    u = _get_user_by_email_or_username(db, email, username)
+    if not u:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usuario no encontrado")
+
+    stored = _get_password_hash_value(u)
+    if not stored or not verify_password(password, stored):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Credenciales incorrectas")
+
+    token = create_access_token({"sub": str(getattr(u, "id", ""))})
+    user_out = _user_to_dict(u)
+
+    return {"user": user_out, "user_schema": user_out, "token": token}
+
+
+@router.post("/", status_code=status.HTTP_201_CREATED)
+def registrar(payload: dict, db: Session = Depends(get_db)):
+    """
+    Acepta:
+      { "username": "...", "email": "...", "password": "..." }
+    Devuelve:
+      { "user": {...} }
+    """
+    username = (payload.get("username") or "").strip()
+    email = (payload.get("email") or "").strip()
+    password = payload.get("password") or ""
+
+    if not username or not email or not password:
+        raise HTTPException(status_code=400, detail="username, email y password son obligatorios")
+
+    # Verificar duplicados
+    if db.query(models.Usuario).filter(models.Usuario.username == username).first():
+        raise HTTPException(status_code=400, detail="El usuario ya existe")
+    if db.query(models.Usuario).filter(models.Usuario.email == email).first():
+        raise HTTPException(status_code=400, detail="El email ya existe")
+
+    # Crear usuario
+    u_kwargs = {
+        "username": username,
+        "email": email,
+    }
+    # rol por defecto si existe campo
+    if hasattr(models.Usuario, "rol"):
+        u_kwargs["rol"] = "cliente"
+    if hasattr(models.Usuario, "role"):
+        u_kwargs["role"] = "cliente"
+
+    u = models.Usuario(**u_kwargs)
+    _set_password(u, password)
+
     try:
-        yield db
-    finally:
-        db.close()
+        db.add(u)
+        db.commit()
+        db.refresh(u)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Usuario o email duplicado")
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="No se pudo registrar el usuario")
 
-# =======================
-# Schemas
-# =======================
-class UsuarioBase(BaseModel):
-    username: str = Field(min_length=3, max_length=50)
-    email: Optional[EmailStr] = None
+    return {"user": _user_to_dict(u)}
 
-class UsuarioCreate(UsuarioBase):
-    password: str = Field(min_length=6, max_length=128)
-    rol: Optional[str] = "cliente"
 
-    # v2
-    @field_validator("rol", mode="before")
-    @classmethod
-    def validar_rol(cls, v):
-        # Acepta "cliente"/"emprendedor" o instancia Enum; default cliente
-        if v is None:
-            return "cliente"
-        if isinstance(v, str):
-            v = v.strip().lower()
-            return v if v in ("cliente", "emprendedor") else "cliente"
-        try:
-            return v.value  # Enum
-        except Exception:
-            return "cliente"
-
-class UsuarioUpdate(BaseModel):
-    username: Optional[str] = Field(default=None, min_length=3, max_length=50)
-    email: Optional[EmailStr] = None
-    password: Optional[str] = Field(default=None, min_length=6, max_length=128)
-
-class UsuarioOut(BaseModel):
-    id: int
-    username: str
-    email: Optional[EmailStr] = None
-    rol: str
-    avatar_url: Optional[str] = None
-    suscripcion_activa: bool
-    created_at: Optional[datetime] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-class LoginIn(BaseModel):
-    identifier: str  # username o email
-    password: str
-
-class TokenOut(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    user: UsuarioOut
-
-# =======================
-# Helpers Auth
-# =======================
-def verify_password(plain_password: str, password_hash: str) -> bool:
-    return pwd_context.verify(plain_password, password_hash)
-
-def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def get_user_by_identifier(db: Session, identifier: str) -> Optional[Usuario]:
-    q = db.query(Usuario)
-    # busca por username primero, luego por email
-    user = q.filter(Usuario.username == identifier).first()
-    if not user and "@" in identifier:
-        user = q.filter(Usuario.email == identifier).first()
-    return user
-
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-) -> Usuario:
-    credentials_error = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="No autenticado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        sub = payload.get("sub")
-        if sub is None:
-            raise credentials_error
-    except JWTError:
-        raise credentials_error
-
-    user = get_user_by_identifier(db, sub)
-    if not user:
-        raise credentials_error
-    return user
-
-# =======================
-# Endpoints
-# =======================
-
-@router.post("/", response_model=UsuarioOut, status_code=201)
-def crear_usuario(data: UsuarioCreate, db: Session = Depends(get_db)):
-    # Unicidad username/email
-    if db.query(Usuario).filter(Usuario.username == data.username).first():
-        raise HTTPException(status_code=400, detail="El usuario ya existe.")
-    if data.email and db.query(Usuario).filter(Usuario.email == data.email).first():
-        raise HTTPException(status_code=400, detail="El email ya está en uso.")
-
-    user = Usuario(
-        username=data.username,
-        email=data.email,
-        password_hash=hash_password(data.password),
-        rol=(data.rol if isinstance(data.rol, str) else data.rol.value),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
-
-@router.post("/login", response_model=TokenOut)
-def login(body: LoginIn, db: Session = Depends(get_db)):
-    user = get_user_by_identifier(db, body.identifier)
-    if not user or not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=400, detail="Credenciales inválidas.")
-
-    access_token = create_access_token({"sub": user.username})
-    return TokenOut(access_token=access_token, user=user)
-
-@router.get("/me", response_model=UsuarioOut)
-def get_me(current: Usuario = Depends(get_current_user)):
-    return current
-
-@router.patch("/me", response_model=UsuarioOut)
-def update_me(
-    payload: UsuarioUpdate,
-    db: Session = Depends(get_db),
-    current: Usuario = Depends(get_current_user),
-):
-    # Validar unicidad si cambia username/email
-    if payload.username and payload.username != current.username:
-        if db.query(Usuario).filter(Usuario.username == payload.username).first():
-            raise HTTPException(status_code=400, detail="Ese username ya existe.")
-        current.username = payload.username
-
-    if payload.email and payload.email != current.email:
-        if db.query(Usuario).filter(Usuario.email == payload.email).first():
-            raise HTTPException(status_code=400, detail="Ese email ya está en uso.")
-        current.email = payload.email
-
-    if payload.password:
-        current.password_hash = hash_password(payload.password)
-
-    db.add(current)
-    db.commit()
-    db.refresh(current)
-    return current
-
-@router.post("/activar_emprendedor", response_model=UsuarioOut)
-def activar_emprendedor(
-    db: Session = Depends(get_db),
-    current: Usuario = Depends(get_current_user),
-):
-    # Sube de rol y marca suscripción (simula pago)
-    current.rol = RolUsuario.emprendedor.value
-    current.suscripcion_activa = True
-    db.add(current)
-    db.commit()
-    db.refresh(current)
-    return current
+# Alias por compatibilidad: /usuarios/registro
+@router.post("/registro", status_code=status.HTTP_201_CREATED)
+def registrar_alias(payload: dict, db: Session = Depends(get_db)):
+    return registrar(payload, db)
