@@ -227,17 +227,3 @@ body.modal-open {
 .btn-primary {
   @apply rounded-xl bg-sky-600 text-white px-4 py-2.5 text-sm font-semibold hover:bg-sky-700;
 }
-
-/* -----------------------------------------------------------
-   FIX: asegurar clicks y stacking de la toolbar del calendario
------------------------------------------------------------ */
-.rbc-toolbar,
-.rbc-toolbar * {
-  pointer-events: auto !important;
-}
-
-.rbc-calendar,
-.rbc-toolbar {
-  position: relative;
-  z-index: 10; /* por encima de overlays/sticky cercanos */
-}
