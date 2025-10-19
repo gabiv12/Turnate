@@ -67,7 +67,7 @@ export default function Registro() {
             <div className="rounded-3xl bg-white/90 backdrop-blur-md">
               <div className="grid grid-cols-1 md:grid-cols-2">
                 {/* Lado imagen */}
-                <div className="relative min-h-[260px] md:min-h-[560px]">
+                <div className="relative min-h-[clamp(100px,70svh,220px)] md:min-h-[clamp(240px,60dvh,480px)] max-h-[92svh] overflow-y-auto">
                   <img
                     src={sideImg}
                     alt="Emprender con Turnate"

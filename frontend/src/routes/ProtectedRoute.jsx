@@ -8,24 +8,26 @@ export default function ProtectedRoute() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Rehidratación suave desde localStorage si el contexto viene vacío
-    if (!user) {
-      try {
-        const raw = localStorage.getItem("user");
-        const token = localStorage.getItem("accessToken");
-        if (raw && token) {
-          const u = JSON.parse(raw);
-          if (u?.id) setUser?.(u);
-        }
-      } catch {}
-    }
+    try {
+      // Rehidratar siempre que falte contexto
+      const token = localStorage.getItem("accessToken");
+      const raw = localStorage.getItem("user");
+      if ((!user || !user.id) && token && raw) {
+        const u = JSON.parse(raw);
+        if (u?.id) setUser?.(u);
+      }
+    } catch {}
     setReady(true);
   }, [user, setUser]);
 
-  if (!ready) return null; // pequeño suspense
+  if (!ready) return null;
 
-  if (!user || !user.id) {
+  const hasToken = !!localStorage.getItem("accessToken");
+  const hasUser = !!(user?.id || JSON.parse(localStorage.getItem("user") || "{}")?.id);
+
+  if (!hasToken || !hasUser) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
+
   return <Outlet />;
 }

@@ -2,7 +2,7 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from app.routers import admin_lite 
 from app.database import engine
 from app import models
 from app.routers import usuarios, emprendedores, servicios, horarios, turnos
@@ -38,6 +38,7 @@ app.add_middleware(
 models.Base.metadata.create_all(bind=engine)
 
 # ---------- Routers ----------
+app.include_router(admin_lite.router)
 app.include_router(usuarios.router)
 app.include_router(emprendedores.router)
 app.include_router(servicios.router)

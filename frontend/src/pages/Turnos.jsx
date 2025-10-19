@@ -2,14 +2,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import api from "../services/api";
-import Calendario from "../hooks/Calendario";
-import { format, startOfDay, endOfDay } from "date-fns";
+import Calendario from "../hooks/Calendario.jsx";
+import {
+  format,
+  startOfMonth,
+  endOfMonth,
+  startOfDay,
+  endOfDay,
+} from "date-fns";
 import es from "date-fns/locale/es";
 import { AnimatePresence, motion } from "framer-motion";
 
 const cx = (...c) => c.filter(Boolean).join(" ");
+const btnMinimal = "inline-flex items-center justify-center gap-2 h-10 px-4 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium shadow-sm hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-sky-300/40";
 
-// Íconos inline minimal
+const IconPlus = (props) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
+    className="h-4 w-4" {...props}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
 const IconLayers = (props) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
     strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
@@ -28,9 +42,6 @@ const IconClock = (props) => (
   </svg>
 );
 
-/* =========================================================
-   SUGERENCIAS (ticker)
-   ========================================================= */
 function SugerenciasTicker({ items = [], intervalMs = 4200 }) {
   const [idx, setIdx] = useState(0);
   const [flash, setFlash] = useState(false);
@@ -40,7 +51,7 @@ function SugerenciasTicker({ items = [], intervalMs = 4200 }) {
     if (!items.length) return;
     timer.current = setInterval(() => {
       setFlash(true);
-      setTimeout(() => setFlash(false), 220);
+      setTimeout(() => setFlash(false), 180);
       setIdx((i) => (i + 1) % items.length);
     }, intervalMs);
     return () => clearInterval(timer.current);
@@ -60,7 +71,7 @@ function SugerenciasTicker({ items = [], intervalMs = 4200 }) {
             initial={{ y: 18, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -18, opacity: 0 }}
-            transition={{ duration: 0.28 }}
+            transition={{ duration: 0.26 }}
           >
             {items[idx]}
           </motion.div>
@@ -79,9 +90,6 @@ function SugerenciasTicker({ items = [], intervalMs = 4200 }) {
   );
 }
 
-/* =========================================================
-   MODAL BASE
-   ========================================================= */
 function Modal({ open, onClose, title, children }) {
   if (!open) return null;
   return (
@@ -106,24 +114,20 @@ function Modal({ open, onClose, title, children }) {
   );
 }
 
-/* =========================================================
-   FORMULARIO DE TURNO
-   ========================================================= */
 function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
+  const normDur = (s) => s?.duracion_min ?? s?.duracion_minutos ?? 30;
+
   const [form, setForm] = useState(() => {
     const f = initial || {};
     const fechaISO =
-      typeof f.fecha === "string"
-        ? f.fecha
-        : f.fecha instanceof Date
+      f.fecha instanceof Date
         ? f.fecha.toISOString().slice(0, 10)
+        : typeof f.fecha === "string"
+        ? f.fecha
         : new Date().toISOString().slice(0, 10);
+
     const hora =
-      typeof f.hora === "string"
-        ? f.hora
-        : f.fecha instanceof Date
-        ? format(f.fecha, "HH:mm")
-        : "";
+      f.fecha instanceof Date ? format(f.fecha, "HH:mm") : f.hora || "";
 
     return {
       servicio_id: f.servicio_id ? String(f.servicio_id) : "",
@@ -135,7 +139,6 @@ function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
   });
 
   const [err, setErr] = useState({});
-
   const onChange = (e) => {
     const { name, value } = e.target;
     setForm((p) => ({ ...p, [name]: value }));
@@ -157,11 +160,14 @@ function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
     const [h, m] = form.hora.split(":");
     const dt = new Date(form.fecha);
     dt.setHours(Number(h), Number(m), 0, 0);
+
     onSubmit?.({
       servicio_id: Number(form.servicio_id),
       datetime: dt.toISOString(),
       cliente_nombre: form.cliente_nombre.trim(),
       notas: form.notas?.trim() || null,
+      _duracion:
+        normDur(servicios.find((s) => s.id === Number(form.servicio_id))) || 30,
     });
   };
 
@@ -181,7 +187,7 @@ function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
           <option value="">Elegí…</option>
           {servicios.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.nombre} · {s.duracion_min} min
+              {s.nombre} · {(s.duracion_min ?? s.duracion_minutos ?? 30)} min
             </option>
           ))}
         </select>
@@ -271,28 +277,21 @@ function TurnoForm({ initial, servicios = [], onSubmit, onCancel, loading }) {
   );
 }
 
-/* =========================================================
-   HELPERS
-   ========================================================= */
 const toDate = (v) => (v ? new Date(v) : null);
+
 function mapTurnoParaCalendario(t, servicios = []) {
+  const svc = servicios.find((s) => s.id === Number(t.servicio_id));
+  const durMin = t?.duracion_minutos ?? svc?.duracion_min ?? svc?.duracion_minutos ?? 30;
+
   const start =
     toDate(t.inicio) || toDate(t.desde) || toDate(t.datetime) || new Date();
-  const durMin =
-    t?.servicio?.duracion_min ||
-    servicios.find((s) => s.id === Number(t.servicio_id))?.duracion_min ||
-    30;
   const end =
     toDate(t.fin) ||
     toDate(t.hasta) ||
     new Date(start.getTime() + durMin * 60000);
 
   const nombreServicio =
-    t?.servicio?.nombre ||
-    servicios.find((s) => s.id === Number(t.servicio_id))?.nombre ||
-    t.titulo ||
-    "Servicio";
-
+    t?.servicio?.nombre || svc?.nombre || t.servicio_nombre || "Servicio";
   const cliente = t?.cliente?.nombre || t.cliente_nombre || "—";
 
   return {
@@ -300,7 +299,7 @@ function mapTurnoParaCalendario(t, servicios = []) {
     title: `${cliente} · ${nombreServicio}`,
     start,
     end,
-    servicio_id: t.servicio_id ?? null,
+    servicio_id: t.servicio_id ?? svc?.id ?? null,
     servicio: nombreServicio,
     cliente_nombre: cliente,
     notas: t.notas ?? "",
@@ -308,20 +307,30 @@ function mapTurnoParaCalendario(t, servicios = []) {
   };
 }
 
-/* =========================================================
-   PÁGINA TURNOS
-   ========================================================= */
 export default function Turnos() {
   const navigate = useNavigate();
-
   const [isEmprendedor, setIsEmprendedor] = useState(false);
-  const [owner, setOwner] = useState(null); // {id, codigo}
+  const [owner, setOwner] = useState(null);
   const [servicios, setServicios] = useState([]);
-  const [horarios, setHorarios] = useState([]); // para sombrear días sin horario
+  const [horarios, setHorarios] = useState([]);
   const [eventos, setEventos] = useState([]);
+  const [rawTurnos, setRawTurnos] = useState([]);
   const [selected, setSelected] = useState(null);
   const [openNew, setOpenNew] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const [rStart, setRStart] = useState(() => {
+    const d = new Date();
+    const s = startOfMonth(d);
+    s.setHours(0, 0, 0, 0);
+    return s;
+  });
+  const [rEnd, setREnd] = useState(() => {
+    const d = new Date();
+    const e = endOfMonth(d);
+    e.setHours(23, 59, 59, 999);
+    return e;
+  });
 
   const sugerencias = [
     "Cargá tus Servicios y definí Horarios antes de tomar turnos.",
@@ -332,41 +341,33 @@ export default function Turnos() {
     "Bloqueá feriados en Horarios para evitar reservas.",
   ];
 
-  // Detectar rol
   useEffect(() => {
-    const uRaw = localStorage.getItem("user");
-    const u = uRaw ? JSON.parse(uRaw) : null;
-    if (String(u?.rol || "").toLowerCase() === "emprendedor") {
-      setIsEmprendedor(true);
-    }
+    try {
+      const u = JSON.parse(localStorage.getItem("user") || "null");
+      if (String(u?.rol || "").toLowerCase() === "emprendedor" || u?.es_emprendedor) {
+        setIsEmprendedor(true);
+      }
+    } catch {}
     (async () => {
       try {
         const me = await api.get("/emprendedores/mi");
         if (me?.data?.id) {
           setIsEmprendedor(true);
           setOwner({ id: me.data.id, codigo: me.data.codigo_cliente });
-        } else {
-          setIsEmprendedor(false);
-          setOwner(null);
         }
-      } catch {
-        // no emprendedor logueado
-        setIsEmprendedor(false);
-        setOwner(null);
-      }
+      } catch {}
     })();
   }, []);
 
-  // Carga inicial de servicios/horarios
   useEffect(() => {
     (async () => {
       try {
         if (isEmprendedor) {
           const rs = await api.get("/servicios/mis");
-          setServicios(rs.data || []);
+          setServicios(Array.isArray(rs.data) ? rs.data : []);
           try {
             const rh = await api.get("/horarios/mis");
-            setHorarios(rh.data || []);
+            setHorarios(Array.isArray(rh.data) ? rh.data : []);
           } catch {}
         } else {
           setServicios([]);
@@ -376,47 +377,37 @@ export default function Turnos() {
     })();
   }, [isEmprendedor]);
 
-  // Helper range del mes visible (mes actual)
-  const monthRange = () => {
-    const now = new Date();
-    const desde = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1)).toISOString();
-    const hasta = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0)).toISOString();
-    return { desde, hasta };
-  };
-
-  // Refrescar eventos (propios si cliente / owner si emprendedor)
-  const refreshEventos = async () => {
+  async function fetchTurnosRange(start, end) {
     try {
-      const { desde, hasta } = monthRange();
+      const params = { desde: start.toISOString(), hasta: end.toISOString() };
       const url = isEmprendedor ? "/turnos/owner" : "/turnos/mis";
-      const rt = await api.get(url, { params: { desde, hasta } });
-      const data = Array.isArray(rt.data) ? rt.data : [];
-      setEventos(data.map((t) => mapTurnoParaCalendario(t, servicios)));
-    } catch (e) {
-      // opcional: console.warn(e);
+      const rt = await api.get(url, { params });
+      const arr = Array.isArray(rt.data) ? rt.data : [];
+      setRawTurnos(arr);
+      setEventos(arr.map((t) => mapTurnoParaCalendario(t, servicios)));
+    } catch {
+      setRawTurnos([]);
+      setEventos([]);
     }
-  };
+  }
 
-  // Primera carga de turnos + cada vez que cambian servicios (para duraciones)
+  const firstLoadRef = useRef(false);
   useEffect(() => {
-    refreshEventos();
+    if (firstLoadRef.current) return;
+    firstLoadRef.current = true;
+    fetchTurnosRange(rStart, rEnd);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEmprendedor, servicios.length]);
+  }, [isEmprendedor]);
 
-  const agendaDeHoy = useMemo(
-    () =>
-      eventos
-        .filter((e) => {
-          const d = new Date();
-          return (
-            e.start.getFullYear() === d.getFullYear() &&
-            e.start.getMonth() === d.getMonth() &&
-            e.start.getDate() === d.getDate()
-          );
-        })
-        .sort((a, b) => a.start - b.start),
-    [eventos]
-  );
+  useEffect(() => {
+    setEventos(rawTurnos.map((t) => mapTurnoParaCalendario(t, servicios)));
+  }, [servicios, rawTurnos]);
+
+  const handleRangeRequest = (start, end /*, view*/) => {
+    setRStart(start);
+    setREnd(end);
+    fetchTurnosRange(start, end);
+  };
 
   const onSelectEvent = (evt) => setSelected(evt);
   const onSelectSlot = () => {
@@ -424,7 +415,6 @@ export default function Turnos() {
     if (isEmprendedor) setOpenNew(true);
   };
 
-  // Sombrear días sin horario (si Calendario soporta dayPropGetter)
   const enabledWeekdays = useMemo(() => {
     const set = new Set(
       (horarios || [])
@@ -433,16 +423,12 @@ export default function Turnos() {
     );
     return set;
   }, [horarios]);
+
   const dayPropGetter = (date) => {
     if (!isEmprendedor) return {};
-    const wd = date.getDay(); // 0=Dom..6=Sab
+    const wd = date.getDay();
     if (!enabledWeekdays.has(wd)) {
-      return {
-        style: {
-          backgroundColor: "#f3f4f6", // slate-100
-          color: "#9ca3af", // slate-400
-        },
-      };
+      return { style: { backgroundColor: "#f3f4f6", color: "#9ca3af" } };
     }
     return {};
   };
@@ -450,20 +436,18 @@ export default function Turnos() {
   const crearTurno = async (payload) => {
     try {
       setLoading(true);
-      // Para compat: enviamos datetime, servicio_id, cliente_nombre, notas y, si lo tenemos, emprendedor_id
       const body = {
         servicio_id: payload.servicio_id,
-        datetime: payload.datetime, // el back calcula fin
+        datetime: payload.datetime,
         cliente_nombre: payload.cliente_nombre,
         notas: payload.notas,
         ...(owner?.id ? { emprendedor_id: owner.id } : {}),
       };
       await api.post("/turnos/compat", body);
-
-      await refreshEventos(); // me aseguro de ver el turno nuevo
+      await fetchTurnosRange(rStart, rEnd);
       setOpenNew(false);
       alert("Turno creado con éxito.");
-    } catch (e) {
+    } catch {
       alert("No se pudo crear el turno.");
     } finally {
       setLoading(false);
@@ -474,11 +458,10 @@ export default function Turnos() {
     if (!selected) return;
     try {
       setLoading(true);
-      // Para PATCH armamos inicio/fin (por si el back lo requiere)
-      const dur =
-        servicios.find((s) => s.id === payload.servicio_id)?.duracion_min || 30;
+      const dur = payload._duracion ?? 30;
       const inicio = new Date(payload.datetime);
       const fin = new Date(inicio.getTime() + dur * 60000);
+
       await api.patch(`/turnos/${selected.id}`, {
         inicio: inicio.toISOString(),
         fin: fin.toISOString(),
@@ -487,7 +470,7 @@ export default function Turnos() {
         notas: payload.notas,
       });
 
-      await refreshEventos();
+      await fetchTurnosRange(rStart, rEnd);
       setSelected(null);
       setOpenNew(false);
       alert("Turno actualizado.");
@@ -503,7 +486,7 @@ export default function Turnos() {
     if (!confirm("¿Eliminar el turno seleccionado?")) return;
     try {
       await api.delete(`/turnos/${selected.id}`);
-      setEventos((prev) => prev.filter((e) => e.id !== selected.id));
+      await fetchTurnosRange(rStart, rEnd);
       setSelected(null);
       alert("Turno eliminado con éxito.");
     } catch {
@@ -511,7 +494,15 @@ export default function Turnos() {
     }
   };
 
-  // CLIENTE (agenda solo de visualización + botón reservar)
+  const agendaDeHoy = useMemo(() => {
+    const d = new Date();
+    const s = startOfDay(d);
+    const e = endOfDay(d);
+    return eventos
+      .filter((ev) => ev.start >= s && ev.start <= e)
+      .sort((a, b) => a.start - b.start);
+  }, [eventos]);
+
   if (!isEmprendedor) {
     return (
       <div className="space-y-4">
@@ -535,17 +526,16 @@ export default function Turnos() {
             onSelectEvent={onSelectEvent}
             onSelectSlot={() => {}}
             defaultView="month"
-            height={760}
+            height={680}
+            onRangeRequest={handleRangeRequest}
           />
         </div>
       </div>
     );
   }
 
-  // EMPRENDEDOR
   return (
     <div className="space-y-4">
-      {/* HEADER ancho (igual visual) */}
       <div className="-mx-4 lg:-mx-6 overflow-x-clip">
         <div className="rounded-3xl bg-gradient-to-r from-blue-600 to-cyan-400 p-5 md:p-6 text-white shadow">
           <div className="mx-auto max-w-7xl px-4 lg:px-6">
@@ -560,47 +550,58 @@ export default function Turnos() {
               </div>
 
               <div className="flex items-center gap-2">
-                <Link to="/servicios" className="inline-flex items-center gap-2 rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-extrabold ring-2 ring-white/80 shadow hover:brightness-95 focus-visible:ring-4 focus-visible:ring-white" aria-label="Ir a Servicios">
-                  <IconLayers /> <span>Servicios</span>
-                </Link>
+                      <Link
+                        to="/servicios"
+                        className={btnMinimal}
+                        aria-label="Ir a Servicios"
+                      >
+                        <IconLayers />
+                        <span>Servicios</span>
+                      </Link>
 
-                <Link to="/horarios" className="inline-flex items-center gap-2 rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-extrabold ring-2 ring-white/80 shadow hover:brightness-95 focus-visible:ring-4 focus-visible:ring-white" aria-label="Ir a Horarios">
-                  <IconClock /> <span>Horarios</span>
-                </Link>
+                      <Link
+                        to="/horarios"
+                        className={btnMinimal}
+                        aria-label="Ir a Horarios"
+                      >
+                        <IconClock />
+                        <span>Horarios</span>
+                      </Link>
 
-                <button
-                  onClick={() => { setSelected(null); setOpenNew(true); }}
-                  className="rounded-xl bg-white text-sky-700 px-4 py-2 text-sm font-semibold shadow hover:brightness-95"
-                >
-                  + Agregar turno
-                </button>
-              </div>
+                      <button
+                        onClick={() => { setSelected(null); setOpenNew(true); }}
+                        className={btnMinimal}
+                        aria-label="Agregar turno"
+                      >
+                        <IconPlus />
+                        <span>Agregar turno</span>
+                      </button>
+                    </div>
+
             </div>
           </div>
         </div>
       </div>
 
-      {/* GRID principal + derecha */}
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-4 items-start">
-        {/* COLUMNA PRINCIPAL */}
-        <div className="min-w-0">
-          {/* Calendario */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+      {/* === DOS COLUMNAS: desde lg usa flex; sidebar fijo a 320px === */}
+      <div className="lg:flex lg:items-start lg:gap-4">
+        {/* Calendario */}
+        <div className="min-w-0 lg:flex-1">
+          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm relative z-10 overflow-visible">
             <Calendario
               turnos={eventos}
               onSelectEvent={(e) => setSelected(e)}
-              onSelectSlot={onSelectSlot}
+              onSelectSlot={() => { setSelected(null); setOpenNew(true); }}
               defaultView="month"
-              height={760}
-              // sombreamos días sin horario (si el wrapper lo soporta)
+              height={680}
               dayPropGetter={dayPropGetter}
+              onRangeRequest={handleRangeRequest}
             />
           </div>
         </div>
 
-        {/* SIDEBAR DERECHA (sticky) */}
-        <aside className="space-y-4 w-full xl:w-[340px] self-start xl:sticky xl:top-[96px]">
-          {/* Métricas */}
+        {/* Sidebar derecha */}
+        <aside className="space-y-4 w-full lg:w-80 lg:basis-80 lg:shrink-0 self-start lg:sticky lg:top-[96px] z-0 mt-4 lg:mt-0">
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-xl border border-slate-200 bg-white p-3 text-center">
               <div className="text-xs text-slate-500">Servicios</div>
@@ -608,15 +609,23 @@ export default function Turnos() {
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-3 text-center">
               <div className="text-xs text-slate-500">Turnos hoy</div>
-              <div className="text-xl font-semibold">{agendaDeHoy.length}</div>
+              <div className="text-xl font-semibold">
+                {
+                  eventos.filter((e) => {
+                    const d = new Date();
+                    const s = startOfDay(d);
+                    const ee = endOfDay(d);
+                    return e.start >= s && e.start <= ee;
+                  }).length
+                }
+              </div>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-3 text-center">
-              <div className="text-xs text-slate-500">Turnos totales</div>
+              <div className="text-xs text-slate-500">Turnos periodo</div>
               <div className="text-xl font-semibold">{eventos.length}</div>
             </div>
           </div>
 
-          {/* Acciones de turnos */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 font-medium text-slate-700">Acciones de turnos</div>
 
@@ -666,7 +675,7 @@ export default function Turnos() {
                   : "Elegí un turno del calendario para ver acciones."}
               </span>
               <button
-                onClick={refreshEventos}
+                onClick={() => fetchTurnosRange(rStart, rEnd)}
                 className="underline underline-offset-2 hover:text-slate-700"
                 title="Actualizar"
               >
@@ -675,7 +684,6 @@ export default function Turnos() {
             </div>
           </div>
 
-          {/* Agenda de hoy */}
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 font-medium text-slate-700">
               Agenda de hoy · {format(new Date(), "EEEE d 'de' MMMM", { locale: es })}
@@ -698,7 +706,6 @@ export default function Turnos() {
             )}
           </div>
 
-          {/* Sugerencias */}
           <div className="rounded-2xl p-[1px] bg-gradient-to-r from-sky-200 via-cyan-200 to-emerald-200 shadow-sm">
             <div className="rounded-2xl bg-white p-4">
               <SugerenciasTicker items={sugerencias} />
@@ -707,7 +714,6 @@ export default function Turnos() {
         </aside>
       </div>
 
-      {/* Modal crear/editar */}
       <Modal
         open={openNew}
         onClose={() => setOpenNew(false)}

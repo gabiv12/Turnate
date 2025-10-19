@@ -1,5 +1,6 @@
 // src/pages/Reservar.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import { format, startOfDay, endOfDay, isSameDay, addMinutes } from "date-fns";
 import es from "date-fns/locale/es";
 import api from "../services/api";
@@ -8,7 +9,12 @@ import { listarTurnosPublicos, reservarTurno } from "../services/turnos";
 
 const cx = (...c) => c.filter(Boolean).join(" ");
 
+// criterio simple de “parece un código”
+const looksLikeCode = (s) => /^[A-Z0-9]{4,10}$/.test(String(s).trim().toUpperCase());
+
 export default function Reservar() {
+  const { codigo: codigoParam } = useParams(); // /reservar/:codigo (opcional)
+
   const [codigo, setCodigo] = useState("");
   const [buscando, setBuscando] = useState(false);
   const [error, setError] = useState("");
@@ -25,24 +31,41 @@ export default function Reservar() {
   const [confirming, setConfirming] = useState(false);
   const [okMsg, setOkMsg] = useState("");
 
-  // Paso 1: buscar por código
-  const buscar = async () => {
+  // Guards para evitar búsquedas duplicadas
+  const autoOnceRef = useRef(false);  // evita doble useEffect (StrictMode)
+  const lastCodeRef = useRef("");     // último código cargado con éxito
+  const searchingRef = useRef(false); // bloqueo de concurrencia
+  const debounceRef = useRef(null);   // para la auto-búsqueda al tipear
+
+  // Paso 1: buscar por código (con guards)
+  const buscar = async (force = false) => {
     setError("");
     setOkMsg("");
-    setEmp(null);
-    setServicios([]);
-    setHorarios([]);
-    setTurnos([]);
-    setFecha(null);
-    setSlot(null);
-    setServicioId("");
 
-    const code = codigo.trim().toUpperCase();
-    if (!code) {
-      setError("Ingresá un código.");
+    const code = (codigo || "").trim().toUpperCase();
+    if (!looksLikeCode(code)) {
+      setError("Ingresá un código válido.");
       return;
     }
 
+    // Evitar repetidas si ya tenemos ese código cargado o si hay una en curso
+    if (!force) {
+      if (searchingRef.current) return;
+      if (lastCodeRef.current === code && emp) return;
+    }
+
+    // reset visual SOLO si el código cambió (evita “parpadear” al reintentar)
+    if (lastCodeRef.current !== code) {
+      setEmp(null);
+      setServicios([]);
+      setHorarios([]);
+      setTurnos([]);
+      setFecha(null);
+      setSlot(null);
+      setServicioId("");
+    }
+
+    searchingRef.current = true;
     setBuscando(true);
     try {
       const e = await api.get(`/emprendedores/by-codigo/${code}`);
@@ -55,23 +78,53 @@ export default function Reservar() {
       setServicios(rs.data || []);
       setHorarios(rh.data || []);
 
-      // Traer turnos del mes en curso (sirve para ocultar slots ocupados)
+      // Turnos del mes en curso (para ocultar slots ocupados)
       const now = new Date();
       const desde = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1)).toISOString();
       const hasta = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0)).toISOString();
       const t = await listarTurnosPublicos(code, { desde, hasta });
       setTurnos(t || []);
+
+      lastCodeRef.current = code; // marcado como cargado OK
     } catch (err) {
       setError(err?.response?.data?.detail || "No se encontró el emprendimiento");
     } finally {
+      searchingRef.current = false;
       setBuscando(false);
     }
   };
 
+  // Auto-búsqueda si viene /reservar/:codigo (una sola vez)
+  useEffect(() => {
+    if (!codigoParam || autoOnceRef.current) return;
+    autoOnceRef.current = true;
+    const c = String(codigoParam).trim().toUpperCase();
+    setCodigo(c);
+    queueMicrotask(() => buscar(true)); // dispara una única vez
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codigoParam]);
+
+  // Auto-búsqueda al tipear (debounce) para ahorrar un click
+  useEffect(() => {
+    // limpiar cualquier debounce previo
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    // si parece válido, buscamos a los 450ms
+    if (looksLikeCode(codigo) && lastCodeRef.current !== codigo.trim().toUpperCase()) {
+      debounceRef.current = setTimeout(() => buscar(true), 450);
+    }
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codigo]);
+
   // Días habilitados por horarios (si hay al menos un horario activo ese día)
   const isDayEnabled = (date) => {
     const day = date.getDay(); // 0=Dom
-    return horarios.some(h => h.activo && Number(h.dia_semana) === day);
+    return horarios.some((h) => h.activo && Number(h.dia_semana) === day);
   };
 
   // Slots disponibles del día + filtro por turnos ocupados
@@ -80,17 +133,17 @@ export default function Reservar() {
     const day = fecha.getDay();
 
     // turnos del día
-    const ocupados = (turnos || []).filter(t =>
-      isSameDay(new Date(t.inicio || t.desde || t.datetime), fecha)
-    ).map(t => ({
-      inicio: new Date(t.inicio || t.desde || t.datetime),
-      fin: new Date(t.fin || t.hasta || addMinutes(new Date(t.inicio || t.datetime), 30)),
-    }));
+    const ocupados = (turnos || [])
+      .filter((t) => isSameDay(new Date(t.inicio || t.desde || t.datetime), fecha))
+      .map((t) => ({
+        inicio: new Date(t.inicio || t.desde || t.datetime),
+        fin: new Date(t.fin || t.hasta || addMinutes(new Date(t.inicio || t.datetime), 30)),
+      }));
 
     const list = [];
     horarios
-      .filter(h => h.activo && Number(h.dia_semana) === day)
-      .forEach(h => {
+      .filter((h) => h.activo && Number(h.dia_semana) === day)
+      .forEach((h) => {
         const [hhD, mmD] = String(h.hora_desde).split(":").map(Number);
         const [hhH, mmH] = String(h.hora_hasta).split(":").map(Number);
         const base = new Date(fecha);
@@ -101,11 +154,9 @@ export default function Reservar() {
 
         for (let d = new Date(base); d < end; d = addMinutes(d, step)) {
           const fin = addMinutes(new Date(d), step);
-          // check colisión simple con ocupados
-          const choca = ocupados.some(o => o.inicio < fin && o.fin > d);
-          if (!choca) {
-            list.push(new Date(d));
-          }
+          // colisión simple con ocupados
+          const choca = ocupados.some((o) => o.inicio < fin && o.fin > d);
+          if (!choca) list.push(new Date(d));
         }
       });
 
@@ -113,9 +164,7 @@ export default function Reservar() {
   }, [fecha, horarios, turnos]);
 
   // Confirmar reserva → abre modal/confirm
-  const onConfirm = () => {
-    setConfirming(true);
-  };
+  const onConfirm = () => setConfirming(true);
 
   // Enviar reserva a /turnos/compat
   const confirmarReserva = async () => {
@@ -124,15 +173,15 @@ export default function Reservar() {
       setBuscando(true);
       setError("");
       const payload = {
-        datetime: slot.toISOString(),         // el back calcula fin por servicio
+        datetime: slot.toISOString(),   // el back calcula fin por servicio
         servicio_id: Number(servicioId),
-        cliente_nombre: "",                   // opcional
-        notas: "",                             // opcional
+        cliente_nombre: "",             // opcional
+        notas: "",                      // opcional
       };
       await reservarTurno(emp.codigo_cliente, payload);
       setOkMsg("¡Listo! Tu reserva fue creada. Te enviamos un correo de confirmación.");
       setConfirming(false);
-      // refrescar turnos de ese rango para ocultar slot recién ocupado
+      // refrescar turnos del día para ocultar el slot recién ocupado
       const desde = startOfDay(new Date(slot)).toISOString();
       const hasta = endOfDay(new Date(slot)).toISOString();
       const tt = await listarTurnosPublicos(emp.codigo_cliente, { desde, hasta });
@@ -171,13 +220,14 @@ export default function Reservar() {
             <div className="flex gap-2">
               <input
                 value={codigo}
-                onChange={(e) => setCodigo(e.target.value)}
+                onChange={(e) => { setCodigo(e.target.value.toUpperCase()); setError(""); }}
+                onKeyDown={(e) => { if (e.key === "Enter") buscar(); }}
                 placeholder="Código (p.ej. BL8B7Q)"
                 className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm w-44"
               />
               <button
-                onClick={buscar}
-                disabled={buscando || !codigo.trim()}
+                onClick={() => buscar()}
+                disabled={buscando || !looksLikeCode(codigo)}
                 className="btn-primary disabled:opacity-60"
               >
                 {buscando ? "Buscando..." : "Buscar"}
@@ -268,7 +318,7 @@ export default function Reservar() {
                   disabled={!slot}
                 >
                   <option value="">Elegí…</option>
-                  {servicios.map(s => (
+                  {servicios.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.nombre} · {s.duracion_min} min
                     </option>
@@ -312,7 +362,7 @@ export default function Reservar() {
                 <div>Emprendimiento: <b>{emp?.nombre}</b></div>
                 <div>Fecha: <b>{fecha ? format(fecha, "EEEE d 'de' MMMM", { locale: es }) : "-"}</b></div>
                 <div>Hora: <b>{slot ? format(slot, "HH:mm") : "-"}</b></div>
-                <div>Servicio: <b>{servicios.find(s => s.id === Number(servicioId))?.nombre || "-"}</b></div>
+                <div>Servicio: <b>{servicios.find((s) => s.id === Number(servicioId))?.nombre || "-"}</b></div>
               </div>
               <div className="px-5 pb-5 flex gap-2">
                 <button className="btn-plain" onClick={() => setConfirming(false)}>Volver</button>

@@ -12,17 +12,40 @@
   color-scheme: light;
 }
 
-html, body, #root {
+/* Evita scroll horizontal global y desbordes de layout */
+html, body {
   height: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
 }
 
+/* Contenedor raíz a pantalla completa sin doble scroll */
+html, body, #root {
+  min-height: 100%;
+}
+
+/* Tipografía, fondo y suavizados */
 body {
   @apply bg-slate-50 text-slate-800 antialiased;
-  /* Evita doble scroll general y “rebote” en mobile */
-  overflow-y: auto;
-  overscroll-behavior: none;
+  overflow-y: auto; /* scroll vertical solo cuando realmente hay más contenido */
 }
 
+/* Corregir desbordes en flex/grid/tablas/inputs (evita scroll horizontal) */
+*, *::before, *::after { box-sizing: border-box; }
+:where(*){
+  min-width: 0; /* previene que hijos flex/grid ensanchen el viewport */
+}
+:where(table){
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+:where(form) :where(input, select, textarea){
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Imágenes seguras */
 img {
   max-width: 100%;
   height: auto;
@@ -63,10 +86,11 @@ body.modal-open {
   font-size: 0.92rem;
 }
 
-/* Toolbar limpia y responsive */
+/* Toolbar limpia y responsive sin “salto” */
 .rbc-toolbar {
   gap: .5rem;
   flex-wrap: wrap;
+  align-items: center;
 }
 .rbc-toolbar button {
   @apply rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50;
@@ -106,6 +130,18 @@ body.modal-open {
 /* Evitar scroll interno del calendario (fix doble scroll) */
 .rbc-time-view .rbc-time-content {
   overflow: visible;
+  height: auto; /* deja que crezca con el contenido */
+}
+/* Evita barras internas también en vistas mes y agenda */
+.rbc-month-view,
+.rbc-time-view,
+.rbc-agenda-view {
+  overflow: visible;
+}
+
+/* “All day” más compacto (no ocupa altura innecesaria) */
+.rbc-allday-cell {
+  min-height: 32px;
 }
 
 /* Agenda view un poco más legible */
@@ -226,4 +262,17 @@ body.modal-open {
 }
 .btn-primary {
   @apply rounded-xl bg-sky-600 text-white px-4 py-2.5 text-sm font-semibold hover:bg-sky-700;
+}
+
+/* -----------------------------------------------------------
+   Ajustes extra para formularios largos (Login/Registro)
+   - Centra mejor en viewport y evita “saltos” por inputs
+----------------------------------------------------------- */
+/* Si tus páginas de auth usan una card centrada, esto ayuda
+   a que no aparezca scroll vertical innecesario en 13"–14"
+   sin cortar el contenido si crece. */
+.auth-wrap {
+  min-height: 100svh; /* respeta barras/teclado en mobile */
+  display: grid;
+  align-items: center;
 }
