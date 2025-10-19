@@ -4,7 +4,7 @@ import axios from "axios";
 const API_URL = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
 const USE_MOCK = String(import.meta.env.VITE_USE_MOCK ?? "false").toLowerCase() === "true";
 
-// Unificamos claves de token para convivir con otros clientes (components/api.jsx, etc.)
+// Unificamos claves de token (compat con otros clientes)
 const TOKEN_KEYS = ["accessToken", "turnate_token", "token", "access_token", "jwt"];
 
 export function readToken() {
@@ -23,7 +23,16 @@ export function clearToken() {
   for (const k of TOKEN_KEYS) localStorage.removeItem(k);
 }
 
-// ===== Real client =====
+function redirectToLogin() {
+  const isLogin = /^\/login/.test(window.location.pathname);
+  if (isLogin) return;
+  try { clearToken(); } catch {}
+  const here = window.location.pathname + window.location.search + window.location.hash;
+  const next = encodeURIComponent(here || "/");
+  window.location.assign(`/login?next=${next}`);
+}
+
+// ===== Cliente real =====
 function createReal() {
   const client = axios.create({
     baseURL: API_URL,
@@ -45,20 +54,16 @@ function createReal() {
         if (!cfg.data || typeof cfg.data !== "object") {
           cfg.data = {};
         }
-        // activar por defecto si falta
         if (cfg.data.activo === undefined || cfg.data.activo === null) {
           cfg.data.activo = true;
         }
 
-        // normalizar a "HH:mm" (backend guarda "hasta" con formato tiempo)
         const toHHMM = (v) => {
           if (!v) return v;
           if (v instanceof Date) return v.toTimeString().slice(0, 5); // "HH:mm"
           if (typeof v === "string") {
-            // "HH:mm:ss" -> "HH:mm"; "HH:mm" queda igual
             const m = v.match(/^(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/);
             if (m) return `${m[1]}:${m[2]}`;
-            // Si llega ISO u otro formato, intentamos Date
             const d = new Date(v);
             if (!isNaN(d)) return d.toTimeString().slice(0, 5);
             return v;
@@ -68,7 +73,6 @@ function createReal() {
 
         if ("hora_desde" in cfg.data) cfg.data.hora_desde = toHHMM(cfg.data.hora_desde);
         if ("hora_hasta" in cfg.data) cfg.data.hora_hasta = toHHMM(cfg.data.hora_hasta);
-        // por si alguna UI usa desde/hasta en lugar de hora_desde/hora_hasta
         if ("desde" in cfg.data && !("hora_desde" in cfg.data)) {
           cfg.data.hora_desde = toHHMM(cfg.data.desde);
         }
@@ -85,7 +89,13 @@ function createReal() {
 
   client.interceptors.response.use(
     (res) => res,
-    (err) => Promise.reject(err)
+    (err) => {
+      if (err?.response?.status === 401) {
+        // Token inválido/expirado → limpiamos y redirigimos a login con retorno
+        redirectToLogin();
+      }
+      return Promise.reject(err);
+    }
   );
 
   return {

@@ -314,57 +314,41 @@ export default function Estadisticas() {
 
           {/* Leyenda de servicios (tarjetitas) */}
           <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-  <h3 className="text-base font-semibold text-slate-900 mb-2">
-    Servicios (detalle)
-  </h3>
-
-  {agregadosServicio.length === 0 ? (
-    <p className="text-sm text-slate-500">Sin datos en el período.</p>
-  ) : (
-    <ul className="space-y-2">
-      {agregadosServicio.map((s, idx) => {
-        const total = agregadosServicio.reduce((a, x) => a + (x.count || 0), 0) || 1;
-        const count = s.count || 0;
-        const pct = Math.round((count / total) * 100);
-        const color = (PALETTE && PALETTE[idx % PALETTE.length]) || "#0ea5e9"; // fallback
-
-        return (
-          <li
-            key={`${s.servicio_id}-${idx}`}
-            className="rounded-xl border border-slate-200 p-3"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex items-center gap-2">
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ background: color }}
-                />
-                <span className="truncate font-medium text-slate-800">
-                  {s.nombre || "Servicio"}
-                </span>
-              </div>
-
-              <div className="shrink-0 flex items-baseline gap-3">
-                <span className="text-xs text-slate-500">{pct}%</span>
-                <span className="text-sm font-semibold text-slate-900">
-                  {count}
-                </span>
-              </div>
-            </div>
-
-            {/* Barra de progreso en todo el ancho */}
-            <div className="mt-2 h-2 w-full rounded-full bg-slate-100 overflow-hidden">
-              <div
-                className="h-full rounded-full"
-                style={{ width: `${Math.max(pct, 2)}%`, background: color }}
-              />
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  )}
-</div>
+            <h3 className="text-base font-semibold text-slate-900 mb-2">
+              Servicios
+            </h3>
+            {pieCantidad.length === 0 ? (
+              <p className="text-sm text-slate-500">Sin datos en el período.</p>
+            ) : (
+              <ul className="grid grid-cols-1 sm:grid-cols-1 gap-2">
+                {agregadosServicio.map((s, idx) => {
+                  const pct = Math.round((s.count / (totalConfirmados || 1)) * 100);
+                  return (
+                    <li
+                      key={s.servicio_id + "-" + idx}
+                      className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <span
+                          className="inline-block h-3 w-3 rounded-full flex-shrink-0"
+                          style={{ background: PALETTE[idx % PALETTE.length] }}
+                        />
+                        <span className="text-sm text-slate-800 break-words">
+                          {s.nombre}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 pl-3">
+                        <span className="text-xs text-slate-500">{pct}%</span>
+                        <span className="text-xs font-medium text-slate-700">
+                          {s.count}
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         </section>
 
         {/* Historial (tabla paginada) */}
